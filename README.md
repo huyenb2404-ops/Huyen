@@ -31,8 +31,15 @@
 ## Công cụ dùng (100% free/local)
 
 - **nanoGPT** (github.com/karpathy/nanoGPT) — code train GPT từ đầu, ngắn gọn, dễ chỉnh, chạy được cả CPU (rất chậm) lẫn GPU thuê.
-- **Clone trực tiếp vài repo Python mã nguồn mở nổi tiếng trên GitHub** (Flask, Requests, pytest, tqdm, httpx) làm dữ liệu — không cần tài khoản/đăng ký gì thêm ngoài GitHub bạn đã có.
+- **3 loại dữ liệu** (không chỉ code — xem lý do bên dưới):
+  - **Code Python thật**: clone trực tiếp vài repo mã nguồn mở nổi tiếng (Flask, Requests, pytest, tqdm, httpx) — không cần tài khoản thêm.
+  - **TinyStories** (dataset free trên Hugging Face) — truyện ngắn, từ vựng đơn giản, được thiết kế riêng để dạy model NHỎ nói mạch lạc/đúng ngữ pháp — thiếu phần này model sẽ chỉ lặp cú pháp code mà không "hiểu" ngôn ngữ tự nhiên xung quanh.
+  - **GSM8K** (dataset free trên Hugging Face) — toán đố học sinh cấp 2, có giải thích từng bước — cho model thấy dạng "suy luận nhiều bước" thay vì chỉ ra đáp số, đúng ý "tư duy tính toán" bạn nói.
 - Không gọi API nào, không tốn phí ngoài tiền thuê GPU bạn đã có sẵn ngân sách.
+
+**Vì sao cần trộn 3 loại**: model học bằng cách đoán chữ/token tiếp theo. Nếu chỉ cho học code, nó chỉ giỏi đoán cú pháp code, không có nền tảng ngôn ngữ/suy luận để hiểu yêu cầu hay giải thích. Đây là cách các model thật (Qwen3-Coder, GPT...) cũng làm — trộn code + văn bản + dữ liệu suy luận khi train, chỉ khác là họ trộn ở quy mô lớn hơn hàng triệu lần.
+
+**Giới hạn thực tế**: ở quy mô nhỏ (model nhỏ, ít giờ train) như dự án này, thêm 2 loại dữ liệu trên giúp model bớt "ngu" hơn so với chỉ có code, nhưng KHÔNG biến nó thành model biết tính toán/suy luận thật — khả năng đó chỉ xuất hiện rõ ở quy mô lớn hơn rất nhiều. Coi đây là bước cải thiện nền tảng, không phải lời giải cho việc "thông minh".
 
 ## Cài đặt — dán và chạy (chuẩn bị dữ liệu + model)
 
@@ -50,13 +57,15 @@ mkdir -p ~/ai-agent
 git clone https://github.com/karpathy/nanoGPT.git ~/ai-agent/nanoGPT
 cd ~/ai-agent/nanoGPT
 
-echo "== 3. Chuan bi du lieu code that (mien phi, khong can tai khoan) =="
+echo "== 3. Chuan bi du lieu: code that + van ban + toan (mien phi) =="
 mkdir -p data/code_python
 cat > data/code_python/prepare.py << 'EOF'
 import os
 import subprocess
+import random
 import numpy as np
 import tiktoken
+from datasets import load_dataset
 
 REPOS = [
     "https://github.com/pallets/flask.git",
@@ -69,7 +78,8 @@ REPOS = [
 work_dir = os.path.join(os.path.dirname(__file__), "_src")
 os.makedirs(work_dir, exist_ok=True)
 
-texts = []
+# 1) Code that (Python) - trong tam chinh cua model
+code_texts = []
 for url in REPOS:
     name = url.rstrip("/").split("/")[-1].replace(".git", "")
     dest = os.path.join(work_dir, name)
@@ -81,11 +91,23 @@ for url in REPOS:
                 path = os.path.join(root, fn)
                 try:
                     with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        texts.append(f.read())
+                        code_texts.append(f.read())
                 except Exception:
                     pass
 
-text = "\n\n".join(texts)
+# 2) Van ban tu nhien don gian - de model hoc ngu phap/mach lac co ban
+story_ds = load_dataset("roneneldan/TinyStories", split="train[:20000]")
+story_texts = [x["text"] for x in story_ds]
+
+# 3) Tu duy tinh toan - toan giai thich tung buoc, khong chi dap so
+math_ds = load_dataset("openai/gsm8k", "main", split="train")
+math_texts = [f"Question: {x['question']}\nAnswer: {x['answer']}" for x in math_ds]
+
+all_texts = code_texts + story_texts + math_texts
+random.seed(42)
+random.shuffle(all_texts)
+
+text = "\n\n".join(all_texts)
 enc = tiktoken.get_encoding("gpt2")
 ids = np.array(enc.encode_ordinary(text), dtype=np.uint16)
 
@@ -95,7 +117,7 @@ val_ids = ids[int(n * 0.9):]
 
 train_ids.tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
 val_ids.tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
-print(f"Da chuan bi {n} token tu {len(texts)} file Python that (tu {len(REPOS)} repo GitHub mo).")
+print(f"Da chuan bi {n} token — {len(code_texts)} file code, {len(story_texts)} truyen, {len(math_texts)} bai toan.")
 EOF
 python3 data/code_python/prepare.py
 
@@ -146,6 +168,6 @@ Dùng đúng bảng giá bạn có: tier **16GB VRAM (~6.000đ/giờ)** là đ�
 
 ## Đường đi tiếp theo
 
-1. Model đầu tiên sẽ yếu — cải thiện bằng cách tăng dữ liệu (dùng thêm ngôn ngữ khác trong the-stack-smol, hoặc bộ lớn hơn nếu ngân sách cho phép), tăng `n_layer`/`n_embd`, train nhiều iter hơn.
+1. Model đầu tiên sẽ yếu — cải thiện bằng cách tăng dữ liệu (thêm repo GitHub khác, thêm truyện/bài toán), tăng `n_layer`/`n_embd`, train nhiều iter hơn.
 2. Khi model đủ tốt để sinh code hợp lệ, mới nên nối nó với 1 vòng lặp tự động (giao việc → sinh code → test → sửa) giống hướng đi trước — nhưng lúc đó "bộ não" đã là model do bạn tự train, không phải Qwen3-Coder có sẵn.
 3. Việc train từ đầu là 1 quá trình lặp đi lặp lại (thử, xem kết quả, chỉnh, thử lại) — không có 1 lần chạy là xong.
