@@ -1,126 +1,107 @@
-# AI Agent Tự Viết Code (Local, Miễn Phí)
+# AI Code Model — Train Từ Số 0 (Local, Miễn Phí)
 
-Mục tiêu: một AI agent chạy trên máy/VPS của bạn — tự nghĩ việc cần làm, tự viết code, tự test, tự sửa lỗi, tự đề xuất việc tiếp theo, và chỉ báo lại người khi gặp việc vượt khả năng. 100% dùng công cụ free/local, không tốn phí API.
+**Đã sửa lại hướng đi**: bản trước dùng model có sẵn (Qwen3-Coder qua Ollama) — không đúng ý ban đầu. Bản này train **1 mạng nơ-ron hoàn toàn mới, trọng số random**, không dùng model có sẵn nào.
 
-## Các mảnh ghép (kiến trúc)
+## Thực tế cần biết trước khi bắt đầu
 
-- **Ollama** — phần mềm chạy model AI ngay trên máy, không cần gọi ra internet mỗi lần hỏi (tải model 1 lần, dùng mãi, không tính phí theo lượt).
-- **Qwen3-Coder** (chạy qua Ollama) — "bộ não" viết code.
-- **Aider** — công cụ dòng lệnh: đọc code, sửa file, tự chạy test, tự lưu (commit) vào git. Đây là "tay chân" thực thi việc.
-- **loop.sh** (script tự tạo) — đóng vai "quản lý": lấy việc từ danh sách, giao cho Aider làm, kiểm tra xong chưa, nếu bí thì ghi lại để báo bạn, hết việc thì tự nghĩ việc tiếp theo.
+- **"Từ số 0" kiểu không dùng dữ liệu gì cả** (tự học 100% qua self-discovery) đã thử và ước tính mất **hàng trăm năm** — không khả thi, bỏ qua hướng này.
+- **Hướng đang làm**: train từ đầu (random init) nhưng cho học từ **dữ liệu code thật, có sẵn, miễn phí** — khả thi trong vài giờ đến vài ngày tuỳ ngân sách GPU thuê.
+- Đổi lại: model sẽ **yếu hơn Qwen3-Coder hoặc GPT-6 Astra rất nhiều** — vì những model đó tốn hàng triệu đô và hàng ngàn GPU để train. Với ngân sách của bạn, kết quả ban đầu chỉ là model nhỏ, biết hoàn thành các đoạn code đơn giản/quen thuộc — **chưa thể tự lên kế hoạch, tự test, tự sửa lỗi như agent bạn mô tả**. Đây là bước nền tảng (learning + nghiên cứu), không phải sản phẩm hoàn chỉnh ngay.
 
-## Chọn model theo phần cứng
+## Công cụ dùng (100% free/local)
 
-- **Máy/VPS chỉ có CPU** (ví dụ RAM 24GB như VPS cũ của bạn): bản Qwen3-Coder nhỏ nhất hiện có chính thức là **30B** (~19GB) — khá sát trần RAM nhưng chạy được, script bên dưới đã giảm context xuống 8192 để đỡ tốn RAM hơn. Nếu máy đơ/quá chậm, mở `setup.sh` đổi 1 dòng `MODEL_TAG` sang `qwen2.5-coder:14b` (nhẹ hơn nhiều, vẫn họ Qwen, ổn định hơn trên CPU).
-- **Khi thuê thêm VPS có GPU**: tier **24GB VRAM (~9.000đ/giờ)** là vừa đủ để chạy bản 30B đầy đủ, nhanh hơn CPU rất nhiều — bật lên lúc cần xử lý việc nặng rồi tắt ngay để tiết kiệm.
+- **nanoGPT** (github.com/karpathy/nanoGPT) — code train GPT từ đầu, ngắn gọn, dễ chỉnh, chạy được cả CPU (rất chậm) lẫn GPU thuê.
+- **bigcode/the-stack-smol** — bộ dữ liệu code Python thật, ~10.000 file, giấy phép mở, tải free qua thư viện `datasets` của Hugging Face.
+- Không gọi API nào, không tốn phí ngoài tiền thuê GPU bạn đã có sẵn ngân sách.
 
-## Cài đặt — dán và chạy 1 lần
-
-Lưu đoạn dưới thành file `setup.sh` trên VPS/máy tính (Ubuntu), rồi chạy `bash setup.sh`:
+## Cài đặt — dán và chạy (chuẩn bị dữ liệu + model)
 
 ```bash
 #!/usr/bin/env bash
 set -e
 
-echo "== 1. Cai Ollama =="
-curl -fsSL https://ollama.com/install.sh | sh
-
-echo "== 2. Tang context window mac dinh cua Ollama =="
-sudo mkdir -p /etc/systemd/system/ollama.service.d
-printf '[Service]\nEnvironment="OLLAMA_CONTEXT_LENGTH=8192"\n' | sudo tee /etc/systemd/system/ollama.service.d/override.conf > /dev/null
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-sleep 3
-
-echo "== 3. Tai model =="
-MODEL_TAG="qwen3-coder:30b"
-# May yeu / hay bi treo thi doi dong tren thanh: MODEL_TAG="qwen2.5-coder:14b"
-ollama pull "$MODEL_TAG"
-
-echo "== 4. Cai Python + Aider =="
+echo "== 1. Cai Python + thu vien =="
 sudo apt-get update -y
 sudo apt-get install -y python3 python3-pip git
-pip3 install -U aider-chat --break-system-packages
+pip3 install --break-system-packages torch numpy transformers datasets tiktoken tqdm
 
-echo "== 5. Tao thu muc lam viec =="
-mkdir -p ~/ai-agent/workspace
-cd ~/ai-agent
-[ -d workspace/.git ] || git init workspace
-echo "$MODEL_TAG" > model.txt
-touch NEEDS_HUMAN.md
-[ -f TASKS.md ] || echo "- [ ] Doc code trong workspace/, viet lai README.md mo ta du an" > TASKS.md
+echo "== 2. Tai nanoGPT =="
+mkdir -p ~/ai-agent
+git clone https://github.com/karpathy/nanoGPT.git ~/ai-agent/nanoGPT
+cd ~/ai-agent/nanoGPT
 
-cat > workspace/.aider.model.settings.yml << EOF
-- name: ollama_chat/$MODEL_TAG
-  edit_format: whole
-  num_ctx: 8192
+echo "== 3. Chuan bi du lieu code that (mien phi, hop phap) =="
+mkdir -p data/code_python
+cat > data/code_python/prepare.py << 'EOF'
+import os
+import numpy as np
+import tiktoken
+from datasets import load_dataset
+
+ds = load_dataset("bigcode/the-stack-smol", data_dir="data/python")["train"]
+enc = tiktoken.get_encoding("gpt2")
+
+text = "\n\n".join(x["content"] for x in ds)
+ids = enc.encode_ordinary(text)
+ids = np.array(ids, dtype=np.uint16)
+
+n = len(ids)
+train_ids = ids[: int(n * 0.9)]
+val_ids = ids[int(n * 0.9):]
+
+train_ids.tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
+val_ids.tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
+print(f"Da chuan bi {n} token tu {len(ds)} file Python that.")
+EOF
+python3 data/code_python/prepare.py
+
+echo "== 4. Tao config model nho (phu hop GPU thue re) =="
+cat > config/train_code_small.py << 'EOF'
+out_dir = 'out-code-small'
+dataset = 'code_python'
+eval_interval = 250
+eval_iters = 50
+log_interval = 20
+
+batch_size = 12
+block_size = 512
+n_layer = 6
+n_head = 6
+n_embd = 384
+dropout = 0.1
+
+learning_rate = 3e-4
+max_iters = 5000
+lr_decay_iters = 5000
+min_lr = 3e-5
+warmup_iters = 200
+
+compile = False
 EOF
 
-echo "== 6. Tao vong lap tu dong =="
-cat > loop.sh << 'SCRIPT'
-#!/usr/bin/env bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-export OLLAMA_API_BASE=http://127.0.0.1:11434
-MODEL="ollama_chat/$(cat "$DIR/model.txt")"
-cd "$DIR/workspace"
-
-while true; do
-  TASK=$(grep -m1 '^- \[ \]' "$DIR/TASKS.md" || true)
-
-  if [ -z "$TASK" ]; then
-    echo "[$(date)] Het viec - nho AI de xuat viec moi"
-    aider --model "$MODEL" --yes-always --no-show-release-notes --message "Doc code trong thu muc nay. De xuat DUNG 1 viec cu the nen lam tiep de cai thien du an, ghi vao file $DIR/TASKS.md dang: - [ ] mo ta. Chi ghi vao TASKS.md, khong sua file code."
-    sleep 30
-    continue
-  fi
-
-  echo "[$(date)] Dang lam: $TASK"
-  aider --model "$MODEL" --yes-always --auto-test --no-show-release-notes --message "Lam viec nay: ${TASK#- [ ] }. Sua code, dam bao chay duoc va test qua. That bai thi tu sua va thu lai ngay. Khi CHAC CHAN xong va test qua, xoa dong task nay khoi file $DIR/TASKS.md."
-
-  STILL_THERE=$(grep -F -m1 "$TASK" "$DIR/TASKS.md" || true)
-  if [ -n "$STILL_THERE" ]; then
-    N=$(( $(cat "$DIR/.failcount" 2>/dev/null || echo 0) + 1 ))
-    echo "$N" > "$DIR/.failcount"
-    if [ "$N" -ge 3 ]; then
-      echo "- $(date '+%Y-%m-%d %H:%M') KHONG LAM DUOC sau $N lan: ${TASK#- [ ] }" >> "$DIR/NEEDS_HUMAN.md"
-      grep -vF "$TASK" "$DIR/TASKS.md" > "$DIR/TASKS.md.tmp" && mv "$DIR/TASKS.md.tmp" "$DIR/TASKS.md"
-      rm -f "$DIR/.failcount"
-    fi
-  else
-    rm -f "$DIR/.failcount"
-  fi
-  sleep 30
-done
-SCRIPT
-chmod +x loop.sh
-
 echo ""
-echo "== XONG =="
-echo "Chay nen:  cd ~/ai-agent && nohup ./loop.sh > agent.log 2>&1 &"
-echo "Xem log:   tail -f ~/ai-agent/agent.log"
-echo "Dung lai:  pkill -f loop.sh"
+echo "== XONG PHAN CHUAN BI =="
+echo "Train (can GPU thue moi du nhanh):"
+echo "  cd ~/ai-agent/nanoGPT && python3 train.py config/train_code_small.py"
+echo ""
+echo "Chi co CPU thi them: python3 train.py config/train_code_small.py --device=cpu --compile=False"
+echo "(CPU se rat cham, chi nen thu voi max_iters nho, vi du sua thanh 200, de kiem tra chay duoc)"
 ```
 
-## Sau khi cài xong
+## Sau khi train xong
 
-- Chạy nền: `cd ~/ai-agent && nohup ./loop.sh > agent.log 2>&1 &`
-- Theo dõi: `tail -f agent.log`
-- Xem việc đang làm: `cat TASKS.md`
-- Xem việc bị kẹt cần bạn xử lý: `cat NEEDS_HUMAN.md`
-- Dừng agent: `pkill -f loop.sh`
-- Code thật nằm trong thư mục `workspace/` (đây cũng là git repo riêng của agent).
+Thử model tự hoàn thành code:
+```bash
+cd ~/ai-agent/nanoGPT
+python3 sample.py --out_dir=out-code-small --start="def "
+```
 
-## Giới hạn thực tế cần biết
+## Ngân sách GPU thuê
 
-- Đây là bản v1 "tự động ở mức hợp lý" — không phải AI có ý thức thật. Nó chạy vòng lặp: nghĩ việc → làm → test → sửa → commit, dựa trên model local nên đôi khi chậm/sai hơn model cloud lớn.
-- Chạy trên CPU sẽ chậm (có thể vài phút/bước) — nên để chạy qua đêm rồi xem log, đừng kỳ vọng thấy kết quả ngay lập tức.
-- Repo hiện đang trống nên chưa có bộ test nào — vài việc đầu tiên nên là tự viết test cơ bản, để `--auto-test` có cái mà chạy.
-- Vài lần đầu nên đọc `agent.log` để chỉnh lại câu lệnh trong `loop.sh` cho sát với dự án cụ thể hơn.
+Dùng đúng bảng giá bạn có: tier **16GB VRAM (~6.000đ/giờ)** là đủ cho model nhỏ này. `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm `max_iters` cho vừa ngân sách còn lại.
 
-## Nâng cấp thêm sau này (self-upgrade thật)
+## Đường đi tiếp theo
 
-Bản này để agent tự sửa code trong `workspace/`, nhưng CHƯA cho nó tự sửa chính `loop.sh` của nó (tránh nó tự làm hỏng vòng lặp đang chạy nó). Khi thấy chạy ổn định, có thể thêm bước: định kỳ nhờ Aider đọc `loop.sh`, đề xuất bản cải tiến ra file riêng (`loop_v2.sh`) để duyệt trước khi thay.
-
-## Đưa file này lên GitHub (từ iPhone)
-
-Mở repo trên Safari, đổi `github.com` thành `github.dev` trên URL → mở trình soạn thảo code đầy đủ → dán đè nội dung này vào `README.md` → Commit. (Hoặc dùng app GitHub, chọn README.md → Edit → dán → Commit.)
+1. Model đầu tiên sẽ yếu — cải thiện bằng cách tăng dữ liệu (dùng thêm ngôn ngữ khác trong the-stack-smol, hoặc bộ lớn hơn nếu ngân sách cho phép), tăng `n_layer`/`n_embd`, train nhiều iter hơn.
+2. Khi model đủ tốt để sinh code hợp lệ, mới nên nối nó với 1 vòng lặp tự động (giao việc → sinh code → test → sửa) giống hướng đi trước — nhưng lúc đó "bộ não" đã là model do bạn tự train, không phải Qwen3-Coder có sẵn.
+3. Việc train từ đầu là 1 quá trình lặp đi lặp lại (thử, xem kết quả, chỉnh, thử lại) — không có 1 lần chạy là xong.
