@@ -75,6 +75,8 @@ REPOS = [
     "https://github.com/pytest-dev/pytest.git",
     "https://github.com/tqdm/tqdm.git",
     "https://github.com/encode/httpx.git",
+    "https://github.com/pallets/click.git",
+    "https://github.com/Textualize/rich.git",
 ]
 
 work_dir = os.path.join(os.path.dirname(__file__), "_src")
@@ -98,12 +100,12 @@ for url in REPOS:
                     pass
 
 # 2) Van ban tu nhien don gian - de model hoc ngu phap/mach lac co ban
-story_ds = load_dataset("roneneldan/TinyStories", split="train[:20000]")
+story_ds = load_dataset("roneneldan/TinyStories", split="train[:50000]")
 story_texts = [x["text"] for x in story_ds]
 
 # 3) Kien thuc tong quat - tu vung/van phong nghiem tuc hon truyen tre em
 wiki_stream = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-wiki_texts = [x["text"] for x in wiki_stream.take(3000)]
+wiki_texts = [x["text"] for x in wiki_stream.take(8000)]
 
 # 4) Tu duy tinh toan - toan giai thich tung buoc, khong chi dap so
 math_ds = load_dataset("openai/gsm8k", "main", split="train")
@@ -136,7 +138,7 @@ print(f"Da chuan bi {n} token — {len(code_texts)} file code, {len(story_texts)
 EOF
 python3 data/code_python/prepare.py
 
-echo "== 4. Tao config model nho (phu hop GPU thue re) =="
+echo "== 4. Tao config model (~124 trieu tham so, co GPT-2 small) =="
 cat > config/train_code_small.py << 'EOF'
 out_dir = 'out-code-small'
 dataset = 'code_python'
@@ -144,11 +146,11 @@ eval_interval = 250
 eval_iters = 50
 log_interval = 20
 
-batch_size = 12
+batch_size = 8
 block_size = 512
-n_layer = 6
-n_head = 6
-n_embd = 384
+n_layer = 12
+n_head = 12
+n_embd = 768
 dropout = 0.1
 
 learning_rate = 3e-4
@@ -179,7 +181,7 @@ python3 sample.py --out_dir=out-code-small --start="def "
 
 ## Ngân sách GPU thuê
 
-Dùng đúng bảng giá bạn có: tier **16GB VRAM (~6.000đ/giờ)** là đủ cho model nhỏ này. `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm `max_iters` cho vừa ngân sách còn lại.
+Model đã tăng lên ~124 triệu tham số nên dùng tier **24GB VRAM (~9.000đ/giờ)** cho chắc (16GB vẫn có thể chạy được nhưng dễ thiếu bộ nhớ hơn — nếu gặp lỗi "out of memory", giảm `batch_size` trong config xuống 4 rồi thử lại). `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm cho vừa ngân sách còn lại.
 
 ## Đường đi tiếp theo
 
