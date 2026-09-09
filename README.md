@@ -2,6 +2,11 @@
 
 **Đã sửa lại hướng đi**: bản trước dùng model có sẵn (Qwen3-Coder qua Ollama) — không đúng ý ban đầu. Bản này train **1 mạng nơ-ron hoàn toàn mới, trọng số random**, không dùng model có sẵn nào.
 
+## 2 bước (giống cách các AI như Claude/GPT được tạo ra)
+
+- **Bước 1 — Pretrain (đang làm, file này)**: train model đoán token/code tiếp theo từ dữ liệu thật. Chưa biết "nghe lời" hay trả lời như trợ lý.
+- **Bước 2 — Fine-tune/Alignment (chưa làm, để sau)**: dạy model biết nghe lời, trả lời hữu ích. Chỉ làm khi Bước 1 đã ra được model đoán code đủ tốt.
+
 ## Thực tế cần biết trước khi bắt đầu
 
 - **"Từ số 0" kiểu không dùng dữ liệu gì cả** (tự học 100% qua self-discovery) đã thử và ước tính mất **hàng trăm năm** — không khả thi, bỏ qua hướng này.
