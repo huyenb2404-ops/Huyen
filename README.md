@@ -1,5 +1,20 @@
 # AI Code Model — Train Từ Số 0 (Local, Miễn Phí)
 
+📋 Xem **[TIEP_THEO.md](TIEP_THEO.md)** để biết việc cần làm, ai làm gì, cần công cụ/tài liệu gì.
+
+## Việc cần làm trước khi có thiết bị
+
+**Bạn — chỉ 1 việc**: thuê VPS/máy tính (CPU cũng được để thử trước, có GPU thì train nhanh hơn). Có rồi thì quay lại chat, nhắn Claude 1 câu là đã có thiết bị.
+
+**Sau khi có thiết bị, cách ít việc nhất cho bạn**: cài Claude Code ngay trên thiết bị đó (đăng nhập bằng tài khoản claude.ai hiện có — **không** khai báo `ANTHROPIC_API_KEY` để khỏi tốn phí API riêng), rồi chỉ cần bảo nó "làm theo README trong repo github.com/huyenb2404-ops/Huyen". Nó tự tải, tự cài, tự train, tự sửa nếu lỗi, không cần bạn copy dán từng lệnh. Không muốn cài Claude Code thì quay lại đoạn chat này, Claude dán từng lệnh để bạn tự chạy (mất công hơn).
+
+**AI (Claude) đã làm / sẽ làm — không cần bạn động tay**:
+- [x] Viết + kiểm tra cú pháp script cài đặt, chuẩn bị dữ liệu, config train
+- [x] Chọn nguồn dữ liệu không cần đăng ký tài khoản nào thêm (chỉ dùng GitHub bạn đã có sẵn)
+- [ ] Khi có thiết bị: cài môi trường, tải dữ liệu, chạy train, theo dõi log, tự sửa lỗi, báo kết quả
+
+**Cần công cụ/tài khoản gì**: chỉ VPS/GPU thuê + tài khoản claude.ai đang dùng + tài khoản GitHub đã có. Không cần đăng ký thêm bất kỳ dịch vụ nào khác.
+
 **Đã sửa lại hướng đi**: bản trước dùng model có sẵn (Qwen3-Coder qua Ollama) — không đúng ý ban đầu. Bản này train **1 mạng nơ-ron hoàn toàn mới, trọng số random**, không dùng model có sẵn nào.
 
 ## 2 bước (giống cách các AI như Claude/GPT được tạo ra)
@@ -16,7 +31,7 @@
 ## Công cụ dùng (100% free/local)
 
 - **nanoGPT** (github.com/karpathy/nanoGPT) — code train GPT từ đầu, ngắn gọn, dễ chỉnh, chạy được cả CPU (rất chậm) lẫn GPU thuê.
-- **bigcode/the-stack-smol** — bộ dữ liệu code Python thật, ~10.000 file, giấy phép mở, tải free qua thư viện `datasets` của Hugging Face.
+- **Clone trực tiếp vài repo Python mã nguồn mở nổi tiếng trên GitHub** (Flask, Requests, pytest, tqdm, httpx) làm dữ liệu — không cần tài khoản/đăng ký gì thêm ngoài GitHub bạn đã có.
 - Không gọi API nào, không tốn phí ngoài tiền thuê GPU bạn đã có sẵn ngân sách.
 
 ## Cài đặt — dán và chạy (chuẩn bị dữ liệu + model)
@@ -35,20 +50,44 @@ mkdir -p ~/ai-agent
 git clone https://github.com/karpathy/nanoGPT.git ~/ai-agent/nanoGPT
 cd ~/ai-agent/nanoGPT
 
-echo "== 3. Chuan bi du lieu code that (mien phi, hop phap) =="
+echo "== 3. Chuan bi du lieu code that (mien phi, khong can tai khoan) =="
 mkdir -p data/code_python
 cat > data/code_python/prepare.py << 'EOF'
 import os
+import subprocess
 import numpy as np
 import tiktoken
-from datasets import load_dataset
 
-ds = load_dataset("bigcode/the-stack-smol", data_dir="data/python")["train"]
+REPOS = [
+    "https://github.com/pallets/flask.git",
+    "https://github.com/psf/requests.git",
+    "https://github.com/pytest-dev/pytest.git",
+    "https://github.com/tqdm/tqdm.git",
+    "https://github.com/encode/httpx.git",
+]
+
+work_dir = os.path.join(os.path.dirname(__file__), "_src")
+os.makedirs(work_dir, exist_ok=True)
+
+texts = []
+for url in REPOS:
+    name = url.rstrip("/").split("/")[-1].replace(".git", "")
+    dest = os.path.join(work_dir, name)
+    if not os.path.exists(dest):
+        subprocess.run(["git", "clone", "--depth", "1", url, dest], check=True)
+    for root, _, files in os.walk(dest):
+        for fn in files:
+            if fn.endswith(".py"):
+                path = os.path.join(root, fn)
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        texts.append(f.read())
+                except Exception:
+                    pass
+
+text = "\n\n".join(texts)
 enc = tiktoken.get_encoding("gpt2")
-
-text = "\n\n".join(x["content"] for x in ds)
-ids = enc.encode_ordinary(text)
-ids = np.array(ids, dtype=np.uint16)
+ids = np.array(enc.encode_ordinary(text), dtype=np.uint16)
 
 n = len(ids)
 train_ids = ids[: int(n * 0.9)]
@@ -56,7 +95,7 @@ val_ids = ids[int(n * 0.9):]
 
 train_ids.tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
 val_ids.tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
-print(f"Da chuan bi {n} token tu {len(ds)} file Python that.")
+print(f"Da chuan bi {n} token tu {len(texts)} file Python that (tu {len(REPOS)} repo GitHub mo).")
 EOF
 python3 data/code_python/prepare.py
 
