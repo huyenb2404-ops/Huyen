@@ -31,10 +31,12 @@
 ## Công cụ dùng (100% free/local)
 
 - **nanoGPT** (github.com/karpathy/nanoGPT) — code train GPT từ đầu, ngắn gọn, dễ chỉnh, chạy được cả CPU (rất chậm) lẫn GPU thuê.
-- **3 loại dữ liệu** (không chỉ code — xem lý do bên dưới):
+- **5 loại dữ liệu** (không chỉ code — xem lý do bên dưới):
   - **Code Python thật**: clone trực tiếp vài repo mã nguồn mở nổi tiếng (Flask, Requests, pytest, tqdm, httpx) — không cần tài khoản thêm.
-  - **TinyStories** (dataset free trên Hugging Face) — truyện ngắn, từ vựng đơn giản, được thiết kế riêng để dạy model NHỎ nói mạch lạc/đúng ngữ pháp — thiếu phần này model sẽ chỉ lặp cú pháp code mà không "hiểu" ngôn ngữ tự nhiên xung quanh.
-  - **GSM8K** (dataset free trên Hugging Face) — toán đố học sinh cấp 2, có giải thích từng bước — cho model thấy dạng "suy luận nhiều bước" thay vì chỉ ra đáp số, đúng ý "tư duy tính toán" bạn nói.
+  - **TinyStories** (free, Hugging Face) — truyện ngắn, từ vựng đơn giản, thiết kế riêng để dạy model NHỎ nói mạch lạc/đúng ngữ pháp.
+  - **Wikipedia tiếng Anh** (free, Hugging Face, lấy mẫu ~3.000 bài) — kiến thức tổng quát, văn phong nghiêm túc hơn truyện, giúp model có vốn từ/kiến thức rộng hơn.
+  - **GSM8K** (free, Hugging Face) — toán đố học sinh cấp 2, có giải thích từng bước — đúng ý "tư duy tính toán".
+  - **ARC-Easy** (free, Hugging Face) — câu hỏi khoa học phổ thông dạng trắc nghiệm có đáp án — suy luận kiểu khác toán (khoa học/logic thường thức).
 - Không gọi API nào, không tốn phí ngoài tiền thuê GPU bạn đã có sẵn ngân sách.
 
 **Vì sao cần trộn 3 loại**: model học bằng cách đoán chữ/token tiếp theo. Nếu chỉ cho học code, nó chỉ giỏi đoán cú pháp code, không có nền tảng ngôn ngữ/suy luận để hiểu yêu cầu hay giải thích. Đây là cách các model thật (Qwen3-Coder, GPT...) cũng làm — trộn code + văn bản + dữ liệu suy luận khi train, chỉ khác là họ trộn ở quy mô lớn hơn hàng triệu lần.
@@ -99,11 +101,24 @@ for url in REPOS:
 story_ds = load_dataset("roneneldan/TinyStories", split="train[:20000]")
 story_texts = [x["text"] for x in story_ds]
 
-# 3) Tu duy tinh toan - toan giai thich tung buoc, khong chi dap so
+# 3) Kien thuc tong quat - tu vung/van phong nghiem tuc hon truyen tre em
+wiki_stream = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+wiki_texts = [x["text"] for x in wiki_stream.take(3000)]
+
+# 4) Tu duy tinh toan - toan giai thich tung buoc, khong chi dap so
 math_ds = load_dataset("openai/gsm8k", "main", split="train")
 math_texts = [f"Question: {x['question']}\nAnswer: {x['answer']}" for x in math_ds]
 
-all_texts = code_texts + story_texts + math_texts
+# 5) Suy luan khoa hoc pho thong - trac nghiem co giai thich
+arc_ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="train")
+arc_texts = []
+for x in arc_ds:
+    pairs = list(zip(x["choices"]["label"], x["choices"]["text"]))
+    choices_str = "\n".join(f"{lbl}) {txt}" for lbl, txt in pairs)
+    correct = dict(pairs).get(x["answerKey"], "")
+    arc_texts.append(f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}")
+
+all_texts = code_texts + story_texts + wiki_texts + math_texts + arc_texts
 random.seed(42)
 random.shuffle(all_texts)
 
@@ -117,7 +132,7 @@ val_ids = ids[int(n * 0.9):]
 
 train_ids.tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
 val_ids.tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
-print(f"Da chuan bi {n} token — {len(code_texts)} file code, {len(story_texts)} truyen, {len(math_texts)} bai toan.")
+print(f"Da chuan bi {n} token — {len(code_texts)} file code, {len(story_texts)} truyen, {len(wiki_texts)} bai Wikipedia, {len(math_texts)} bai toan, {len(arc_texts)} cau khoa hoc.")
 EOF
 python3 data/code_python/prepare.py
 
@@ -167,6 +182,8 @@ python3 sample.py --out_dir=out-code-small --start="def "
 Dùng đúng bảng giá bạn có: tier **16GB VRAM (~6.000đ/giờ)** là đủ cho model nhỏ này. `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm `max_iters` cho vừa ngân sách còn lại.
 
 ## Đường đi tiếp theo
+
+**Vì sao dừng ở 5 loại dữ liệu**: model quá nhỏ + giờ train quá ít, thêm loại mới lúc này chỉ loãng phần học của các loại đã có, và dễ lệch khỏi trọng tâm chính là code. Hợp lý hơn là train thử với 5 loại này, xem yếu ở đâu, rồi mới thêm đúng cái đang thiếu — thêm theo bằng chứng thực tế thay vì đoán trước. Nếu chạy `prepare.py` thấy 1 loại nào chiếm áp đảo so với code (dễ nhất là Wikipedia), giảm bớt số mẫu lấy của loại đó (sửa số `3000`/`20000` trong script) thay vì thêm loại mới.
 
 1. Model đầu tiên sẽ yếu — cải thiện bằng cách tăng dữ liệu (thêm repo GitHub khác, thêm truyện/bài toán), tăng `n_layer`/`n_embd`, train nhiều iter hơn.
 2. Khi model đủ tốt để sinh code hợp lệ, mới nên nối nó với 1 vòng lặp tự động (giao việc → sinh code → test → sửa) giống hướng đi trước — nhưng lúc đó "bộ não" đã là model do bạn tự train, không phải Qwen3-Coder có sẵn.
