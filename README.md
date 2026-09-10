@@ -52,12 +52,32 @@ set -e
 echo "== 1. Cai Python + thu vien =="
 sudo apt-get update -y
 sudo apt-get install -y python3 python3-pip git
-pip3 install --break-system-packages torch numpy transformers datasets tiktoken tqdm
+pip3 install --break-system-packages torch numpy transformers datasets tiktoken tqdm bitsandbytes
 
 echo "== 2. Tai nanoGPT =="
 mkdir -p ~/ai-agent
 git clone https://github.com/karpathy/nanoGPT.git ~/ai-agent/nanoGPT
 cd ~/ai-agent/nanoGPT
+
+echo "== 2b. Doi sang 8-bit Adam (giam ~40% bo nho can, train model to hon duoc) =="
+python3 << 'PATCH'
+path = "model.py"
+with open(path) as f:
+    content = f.read()
+old = '''fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == 'cuda'
+        extra_args = dict(fused=True) if use_fused else dict()
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+        print(f"using fused AdamW: {use_fused}")'''
+new = '''import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(optim_groups, lr=learning_rate, betas=betas)
+        print("using bitsandbytes 8-bit AdamW")'''
+assert old in content, "Khong tim thay doan can sua trong model.py - nanoGPT co the da doi cau truc, bao AI biet"
+content = content.replace(old, new)
+with open(path, "w") as f:
+    f.write(content)
+print("Da doi optimizer sang 8-bit AdamW.")
+PATCH
 
 echo "== 3. Chuan bi du lieu: code that + van ban + toan (mien phi) =="
 mkdir -p data/code_python
@@ -103,9 +123,10 @@ for url in REPOS:
 story_ds = load_dataset("roneneldan/TinyStories", split="train[:50000]")
 story_texts = [x["text"] for x in story_ds]
 
-# 3) Kien thuc tong quat - tu vung/van phong nghiem tuc hon truyen tre em
-wiki_stream = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-wiki_texts = [x["text"] for x in wiki_stream.take(8000)]
+# 3) Kien thuc tong quat - tieng Anh + tieng Viet
+wiki_en = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+wiki_vi = load_dataset("wikimedia/wikipedia", "20231101.vi", split="train", streaming=True)
+wiki_texts = [x["text"] for x in wiki_en.take(6000)] + [x["text"] for x in wiki_vi.take(6000)]
 
 # 4) Tu duy tinh toan - toan giai thich tung buoc, khong chi dap so
 math_ds = load_dataset("openai/gsm8k", "main", split="train")
@@ -138,7 +159,7 @@ print(f"Da chuan bi {n} token — {len(code_texts)} file code, {len(story_texts)
 EOF
 python3 data/code_python/prepare.py
 
-echo "== 4. Tao config model (~124 trieu tham so, co GPT-2 small) =="
+echo "== 4. Tao config model (~355 trieu tham so, co GPT-2 medium, dung duoc nho 8-bit Adam) =="
 cat > config/train_code_small.py << 'EOF'
 out_dir = 'out-code-small'
 dataset = 'code_python'
@@ -146,11 +167,11 @@ eval_interval = 250
 eval_iters = 50
 log_interval = 20
 
-batch_size = 8
+batch_size = 4
 block_size = 512
-n_layer = 12
-n_head = 12
-n_embd = 768
+n_layer = 24
+n_head = 16
+n_embd = 1024
 dropout = 0.1
 
 learning_rate = 3e-4
@@ -181,7 +202,9 @@ python3 sample.py --out_dir=out-code-small --start="def "
 
 ## Ngân sách GPU thuê
 
-Model đã tăng lên ~124 triệu tham số nên dùng tier **24GB VRAM (~9.000đ/giờ)** cho chắc (16GB vẫn có thể chạy được nhưng dễ thiếu bộ nhớ hơn — nếu gặp lỗi "out of memory", giảm `batch_size` trong config xuống 4 rồi thử lại). `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm cho vừa ngân sách còn lại.
+Model đã tăng lên ~355 triệu tham số (đỡ tốn nhờ 8-bit Adam) nên dùng tier **24GB VRAM (~9.000đ/giờ)**, tier 32GB (~21.000đ/giờ) thoải mái hơn nếu muốn chắc ăn. Nếu vẫn gặp lỗi "out of memory", giảm `batch_size` xuống 2 hoặc `block_size` xuống 256 rồi thử lại. `max_iters = 5000` chỉ là điểm khởi đầu — chạy thử, xem tốc độ + hết bao nhiêu tiền trong 1 giờ, rồi tăng/giảm cho vừa ngân sách còn lại.
+
+**Muốn lớn hơn nữa (1B+)**: có kỹ thuật thật tên DeepSpeed ZeRO-Offload (đẩy phần optimizer sang RAM của CPU), nhưng cần biết chính xác **VPS/GPU thuê có bao nhiêu RAM CPU** mới tính được nên đẩy lên bao nhiêu — báo AI biết thông số RAM khi thuê được máy, AI sẽ tính lại cụ thể.
 
 ## Đường đi tiếp theo
 
