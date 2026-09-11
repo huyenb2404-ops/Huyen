@@ -31,6 +31,7 @@
   - **Wikipedia tiếng Anh + tiếng Việt** (free, Hugging Face).
   - **TinyStories, GSM8K, MATH, ARC-Easy** (free, Hugging Face) — ngôn ngữ mạch lạc + suy luận toán (dễ đến khó) + khoa học.
   - **Commit sửa lỗi thật** (lấy lại từ chính các repo đã clone, không cần nguồn mới) — ví dụ thật về code sai → sửa đúng, để model học cách "bắt lỗi và tự sửa" thay vì chỉ học code đúng sẵn.
+  - **Khái niệm trading/thị trường** (~40 bài Wikipedia chọn lọc đúng chủ đề: order, thanh khoản, phân tích kỹ thuật, crypto... + bộ hỏi-đáp tài chính `finance-alpaca`) — **chỉ khái niệm, chưa có dữ liệu nến/giá lịch sử** (việc đó để sau, khi cần).
 - Không gọi API AI nào, không tốn phí ngoài tiền thuê GPU/VPS.
 
 ## Phần cứng cần
@@ -206,6 +207,53 @@ with open(raw_bin, "wb") as fh:
                     write_chunk(fh, f"# Vi du sua loi that trong code (commit that tu {gh}):\n{diff}\n")
             except Exception:
                 continue
+
+    # 7) Kien thuc trading/thi truong - KHAI NIEM thoi, CHUA phai du lieu nen/gia
+    # (dung dung API cua Wikipedia de lay dung bai lien quan, khong random nhu wiki o tren)
+    import urllib.request
+    import urllib.parse
+    import json as jsonlib
+
+    TRADING_TOPICS = [
+        "Financial market", "Stock exchange", "Order (exchange)", "Market maker",
+        "Bid-ask spread", "Limit order", "Market order", "Short (finance)",
+        "Leverage (finance)", "Margin (finance)", "Volatility (finance)",
+        "Technical analysis", "Candlestick chart", "Support and resistance (technical analysis)",
+        "Moving average", "Relative strength index", "Bollinger Bands", "MACD",
+        "Fibonacci retracement", "Trading volume", "Market capitalization", "Market liquidity",
+        "Order book", "Futures contract", "Option (finance)", "Derivative (finance)",
+        "Risk management", "Diversification (finance)", "Cryptocurrency", "Bitcoin",
+        "Ethereum", "Blockchain", "Decentralized finance", "Stablecoin",
+        "Initial coin offering", "Market sentiment", "Fundamental analysis",
+        "Day trading", "Swing trading", "Arbitrage",
+    ]
+    for title in TRADING_TOPICS:
+        try:
+            q = urllib.parse.urlencode({
+                "action": "query", "format": "json", "prop": "extracts",
+                "explaintext": "true", "redirects": "1", "titles": title,
+            })
+            req = urllib.request.Request(
+                f"https://en.wikipedia.org/w/api.php?{q}",
+                headers={"User-Agent": "personal-research-project/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = jsonlib.loads(resp.read().decode("utf-8"))
+            for page in data.get("query", {}).get("pages", {}).values():
+                text = page.get("extract", "")
+                if text:
+                    write_chunk(fh, f"# {page.get('title', title)}\n{text}\n")
+        except Exception as e:
+            print(f"Bo qua bai '{title}': {e}")
+            continue
+
+    # 8) Hoi-dap dau tu/tai chinh tong quat (khai niem, khong phai loi khuyen dau tu that)
+    fin_qa = load_dataset("gbharti/finance-alpaca", split="train")
+    for x in fin_qa:
+        instr = x.get("instruction", "") or ""
+        inp = x.get("input", "") or ""
+        out = x.get("output", "") or ""
+        write_chunk(fh, f"Question: {instr}" + (f"\n{inp}" if inp else "") + f"\nAnswer: {out}\n")
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 
