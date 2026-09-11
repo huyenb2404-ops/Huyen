@@ -30,8 +30,10 @@
   - **FineWeb-Edu** (free, Hugging Face, mẫu có sẵn 10 tỷ token) — văn bản chất lượng cao quy mô lớn, không chỉ vài ngàn bài như trước.
   - **Wikipedia tiếng Anh + tiếng Việt** (free, Hugging Face).
   - **TinyStories, GSM8K, MATH, ARC-Easy** (free, Hugging Face) — ngôn ngữ mạch lạc + suy luận toán (dễ đến khó) + khoa học.
-  - **Commit sửa lỗi thật** (lấy lại từ chính các repo đã clone, không cần nguồn mới) — ví dụ thật về code sai → sửa đúng, để model học cách "bắt lỗi và tự sửa" thay vì chỉ học code đúng sẵn.
+  - **Commit sửa lỗi thật** (~12 repo, mở rộng từ 6 — lấy lại từ chính các repo đã clone) — ví dụ thật về code sai → sửa đúng, để model học cách "bắt lỗi và tự sửa" thay vì chỉ học code đúng sẵn.
+  - **codeparrot/apps** (free, Hugging Face) — 10.000 bài toán lập trình thật có lời giải, nhiều mức độ khó — tư duy giải quyết vấn đề bằng code.
   - **Khái niệm trading/thị trường** (~40 bài Wikipedia chọn lọc đúng chủ đề: order, thanh khoản, phân tích kỹ thuật, crypto... + bộ hỏi-đáp tài chính `finance-alpaca`) — **chỉ khái niệm, chưa có dữ liệu nến/giá lịch sử** (việc đó để sau, khi cần).
+  - Đã giảm tỷ trọng FineWeb-Edu (từ 80% xuống 55% ngân sách) để nhường chỗ cho các nguồn suy luận ở trên — tăng mật độ "tư duy" trong cùng ngân sách token, thay vì chỉ tăng tổng số token.
 - Không gọi API AI nào, không tốn phí ngoài tiền thuê GPU/VPS.
 
 ## Phần cứng cần
@@ -135,10 +137,10 @@ with open(raw_bin, "wb") as fh:
         print(f"Sau {name}: ~{total_tokens:,} token")
 
     # 2) Van ban chat luong cao quy mo lon (mau co san 10 ty token, lay 1 phan)
-    if total_tokens < TARGET_TOKENS * 0.8:
+    if total_tokens < TARGET_TOKENS * 0.55:
         fw = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
         for x in fw:
-            if total_tokens >= TARGET_TOKENS * 0.8:
+            if total_tokens >= TARGET_TOKENS * 0.55:
                 break
             write_chunk(fh, x.get("text", ""))
 
@@ -178,7 +180,11 @@ with open(raw_bin, "wb") as fh:
     # 6) Tu duy "bat loi + sua loi" that - lay tu chinh cac commit sua bug trong code that
     # (khong dung nguon moi, dung lai git history cua repo da clone; can clone sau hon
     # vi buoc 1 dung --depth 1 nen khong co lich su de doc)
-    HISTORY_REPOS = ["pallets/click", "psf/requests", "pallets/flask", "tqdm/tqdm", "encode/httpx", "pytest-dev/pytest"]
+    HISTORY_REPOS = [
+        "pallets/click", "psf/requests", "pallets/flask", "tqdm/tqdm", "encode/httpx",
+        "pytest-dev/pytest", "pandas-dev/pandas", "django/django", "numpy/numpy",
+        "scikit-learn/scikit-learn", "pydantic/pydantic", "psf/black",
+    ]
     for gh in HISTORY_REPOS:
         name = gh.split("/")[-1]
         dest = os.path.join(work_dir, f"{name}_hist")
@@ -191,7 +197,7 @@ with open(raw_bin, "wb") as fh:
                 continue
         try:
             log = subprocess.run(
-                ["git", "-C", dest, "log", "--oneline", "-20", "--grep=fix", "-i"],
+                ["git", "-C", dest, "log", "--oneline", "-40", "--grep=fix", "-i"],
                 capture_output=True, text=True, timeout=30
             ).stdout.strip().splitlines()
         except Exception:
@@ -254,6 +260,17 @@ with open(raw_bin, "wb") as fh:
         inp = x.get("input", "") or ""
         out = x.get("output", "") or ""
         write_chunk(fh, f"Question: {instr}" + (f"\n{inp}" if inp else "") + f"\nAnswer: {out}\n")
+
+    # 9) Giai bai toan lap trinh that (co do kho), de hoc tu duy giai quyet van de bang code
+    apps_ds = load_dataset("codeparrot/apps", split="train")
+    for x in apps_ds:
+        try:
+            sols = jsonlib.loads(x["solutions"]) if x["solutions"] else []
+        except Exception:
+            sols = []
+        if not sols:
+            continue
+        write_chunk(fh, f"Problem ({x['difficulty']}): {x['question']}\nSolution:\n{sols[0]}\n")
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 
