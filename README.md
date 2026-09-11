@@ -29,7 +29,8 @@
   - **Code Python thật**: clone ~30 repo mã nguồn mở nổi tiếng (Flask, Django, NumPy, Pandas, FastAPI, scikit-learn...).
   - **FineWeb-Edu** (free, Hugging Face, mẫu có sẵn 10 tỷ token) — văn bản chất lượng cao quy mô lớn, không chỉ vài ngàn bài như trước.
   - **Wikipedia tiếng Anh + tiếng Việt** (free, Hugging Face).
-  - **TinyStories, GSM8K, ARC-Easy** (free, Hugging Face) — ngôn ngữ mạch lạc + suy luận toán/khoa học.
+  - **TinyStories, GSM8K, MATH, ARC-Easy** (free, Hugging Face) — ngôn ngữ mạch lạc + suy luận toán (dễ đến khó) + khoa học.
+  - **Commit sửa lỗi thật** (lấy lại từ chính các repo đã clone, không cần nguồn mới) — ví dụ thật về code sai → sửa đúng, để model học cách "bắt lỗi và tự sửa" thay vì chỉ học code đúng sẵn.
 - Không gọi API AI nào, không tốn phí ngoài tiền thuê GPU/VPS.
 
 ## Phần cứng cần
@@ -167,6 +168,44 @@ with open(raw_bin, "wb") as fh:
         choices_str = "\n".join(f"{lbl}) {txt}" for lbl, txt in pairs)
         correct = dict(pairs).get(x["answerKey"], "")
         write_chunk(fh, f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}\n")
+
+    # 5) Toan kho hon, giai chi tiet tung buoc (bo sung GSM8K de tu duy sau hon)
+    math_hard = load_dataset("hendrycks/competition_math", split="train")
+    for x in math_hard:
+        write_chunk(fh, f"Problem: {x['problem']}\nSolution: {x['solution']}\n")
+
+    # 6) Tu duy "bat loi + sua loi" that - lay tu chinh cac commit sua bug trong code that
+    # (khong dung nguon moi, dung lai git history cua repo da clone; can clone sau hon
+    # vi buoc 1 dung --depth 1 nen khong co lich su de doc)
+    HISTORY_REPOS = ["pallets/click", "psf/requests", "pallets/flask", "tqdm/tqdm", "encode/httpx", "pytest-dev/pytest"]
+    for gh in HISTORY_REPOS:
+        name = gh.split("/")[-1]
+        dest = os.path.join(work_dir, f"{name}_hist")
+        if not os.path.exists(dest):
+            try:
+                subprocess.run(["git", "clone", "--depth", "300", f"https://github.com/{gh}.git", dest],
+                                check=True, timeout=300)
+            except Exception as e:
+                print(f"Bo qua lich su {gh}: {e}")
+                continue
+        try:
+            log = subprocess.run(
+                ["git", "-C", dest, "log", "--oneline", "-20", "--grep=fix", "-i"],
+                capture_output=True, text=True, timeout=30
+            ).stdout.strip().splitlines()
+        except Exception:
+            continue
+        for line in log:
+            h = line.split()[0]
+            try:
+                diff = subprocess.run(
+                    ["git", "-C", dest, "show", h, "-p"],
+                    capture_output=True, text=True, timeout=30
+                ).stdout
+                if 200 < len(diff) < 8000:  # bo qua commit qua nho (khong co gi de hoc) hoac qua to (kho hoc)
+                    write_chunk(fh, f"# Vi du sua loi that trong code (commit that tu {gh}):\n{diff}\n")
+            except Exception:
+                continue
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 
