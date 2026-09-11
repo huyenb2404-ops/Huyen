@@ -64,16 +64,32 @@ import numpy as np
 import tiktoken
 from datasets import load_dataset
 
-TARGET_TOKENS = 3_000_000_000  # tang so nay len de lay them data khi chay lai sau nay
+TARGET_TOKENS = 500_000_000  # thuc te hon 3 ty (xem README: MAX_ITERS moi tinh theo toc do do thuc, khong con doan mo)
 BYTES_PER_TOKEN_EST = 4.5
 need_gb = (TARGET_TOKENS * BYTES_PER_TOKEN_EST) / 1e9
 free_gb = shutil.disk_usage(os.path.dirname(__file__)).free / 1e9
-print(f"Uoc tinh can ~{need_gb:.0f}GB dia trong (con {free_gb:.0f}GB trong).")
+print(f"Uoc tinh can ~{need_gb:.1f}GB dia trong (con {free_gb:.0f}GB trong).")
 if free_gb < need_gb * 1.3:
     raise SystemExit(
-        f"KHONG DU DIA: can khoang {need_gb:.0f}GB (co du phong), chi con {free_gb:.0f}GB. "
+        f"KHONG DU DIA: can khoang {need_gb:.1f}GB (co du phong), chi con {free_gb:.0f}GB. "
         f"Giam TARGET_TOKENS trong file nay xuong roi chay lai, hoac them dia cho VPS."
     )
+
+enc = tiktoken.get_encoding("gpt2")
+assert enc.n_vocab <= 50304, "Tokenizer co vocab lon hon vocab_size cua model (50304) - bao AI biet"
+
+total_tokens = 0
+raw_bin = os.path.join(os.path.dirname(__file__), "all_tokens.bin")
+
+def write_chunk(fh, text):
+    # Tokenize tung doan nho va ghi thang ra dia - khong gom het van ban
+    # vao 1 chuoi khong lo roi tokenize 1 lan (de no RAM voi hang ty token).
+    global total_tokens
+    if not text:
+        return
+    ids = enc.encode_ordinary(text)
+    np.array(ids, dtype=np.uint16).tofile(fh)
+    total_tokens += len(ids)
 
 REPOS = [
     "flask:pallets/flask", "requests:psf/requests", "click:pallets/click",
@@ -89,16 +105,14 @@ REPOS = [
     "typer:tiangolo/typer", "pyyaml:yaml/pyyaml", "cryptography:pyca/cryptography",
     "paramiko:paramiko/paramiko", "gunicorn:benoitc/gunicorn",
 ]
-
-enc = tiktoken.get_encoding("gpt2")
-out_path = os.path.join(os.path.dirname(__file__), "train_val.txt")
-total_tokens = 0
 work_dir = os.path.join(os.path.dirname(__file__), "_src")
 os.makedirs(work_dir, exist_ok=True)
 
-with open(out_path, "w", encoding="utf-8") as out:
+with open(raw_bin, "wb") as fh:
     # 1) Code that - clone ~30 repo GitHub mo
     for entry in REPOS:
+        if total_tokens >= TARGET_TOKENS:
+            break
         name, gh = entry.split(":")
         dest = os.path.join(work_dir, name)
         if not os.path.exists(dest):
@@ -113,20 +127,18 @@ with open(out_path, "w", encoding="utf-8") as out:
                 if fn.endswith(".py"):
                     try:
                         with open(os.path.join(root, fn), "r", encoding="utf-8", errors="ignore") as f:
-                            text = f.read()
-                        out.write(text + "\n\n")
-                        total_tokens += len(enc.encode_ordinary(text))
+                            write_chunk(fh, f.read())
                     except Exception:
                         pass
         print(f"Sau {name}: ~{total_tokens:,} token")
 
     # 2) Van ban chat luong cao quy mo lon (mau co san 10 ty token, lay 1 phan)
-    fw = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
-    for x in fw:
-        if total_tokens >= TARGET_TOKENS * 0.7:
-            break
-        out.write(x["text"] + "\n\n")
-        total_tokens += len(enc.encode_ordinary(x["text"]))
+    if total_tokens < TARGET_TOKENS * 0.8:
+        fw = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
+        for x in fw:
+            if total_tokens >= TARGET_TOKENS * 0.8:
+                break
+            write_chunk(fh, x.get("text", ""))
 
     # 3) Wikipedia Anh + Viet, TinyStories
     extra_sources = [
@@ -140,32 +152,37 @@ with open(out_path, "w", encoding="utf-8") as out:
         stream = load_dataset(ds_name, cfg, split="train", streaming=True) if cfg else \
                  load_dataset(ds_name, split="train", streaming=True)
         for x in stream.take(take_n):
-            out.write(x["text"] + "\n\n")
-            total_tokens += len(enc.encode_ordinary(x["text"]))
+            if total_tokens >= TARGET_TOKENS:
+                break
+            write_chunk(fh, x.get("text", ""))
 
     # 4) Tu duy tinh toan + suy luan khoa hoc
     math_ds = load_dataset("openai/gsm8k", "main", split="train")
     for x in math_ds:
-        out.write(f"Question: {x['question']}\nAnswer: {x['answer']}\n\n")
-        total_tokens += len(enc.encode_ordinary(x["answer"]))
+        write_chunk(fh, f"Question: {x['question']}\nAnswer: {x['answer']}\n")
 
     arc_ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="train")
     for x in arc_ds:
         pairs = list(zip(x["choices"]["label"], x["choices"]["text"]))
         choices_str = "\n".join(f"{lbl}) {txt}" for lbl, txt in pairs)
         correct = dict(pairs).get(x["answerKey"], "")
-        out.write(f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}\n\n")
+        write_chunk(fh, f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}\n")
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 
-with open(out_path, "r", encoding="utf-8") as f:
-    text = f.read()
-ids = np.array(enc.encode_ordinary(text), dtype=np.uint16)
-n = len(ids)
-ids[: int(n * 0.98)].tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
-ids[int(n * 0.98):].tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
-os.remove(out_path)
-print(f"Da ghi train.bin/val.bin: {n:,} token thuc te sau tokenize.")
+# Chia train/val bang memmap - doc/ghi truc tiep tren dia, khong load het vao RAM
+all_ids = np.memmap(raw_bin, dtype=np.uint16, mode="r")
+n = len(all_ids)
+split = int(n * 0.98)
+train_arr = np.memmap(os.path.join(os.path.dirname(__file__), "train.bin"), dtype=np.uint16, mode="w+", shape=(split,))
+train_arr[:] = all_ids[:split]
+train_arr.flush()
+val_arr = np.memmap(os.path.join(os.path.dirname(__file__), "val.bin"), dtype=np.uint16, mode="w+", shape=(n - split,))
+val_arr[:] = all_ids[split:]
+val_arr.flush()
+del all_ids, train_arr, val_arr
+os.remove(raw_bin)
+print(f"Da ghi train.bin ({split:,} token) + val.bin ({n - split:,} token).")
 EOF
 python3 data/code_3b/prepare.py
 ```
@@ -199,6 +216,7 @@ mkdir -p /root/ai-agent/nvme_offload
 
 cat > train_deepspeed.py << 'EOF'
 import os
+import time
 import numpy as np
 import torch
 import deepspeed
@@ -207,9 +225,10 @@ from model import GPTConfig, GPT
 DATA_DIR = "data/code_3b"
 BLOCK_SIZE = 512
 MICRO_BATCH = 1
-MAX_ITERS = 3000
+GRAD_ACCUM = 32          # phai khop voi gradient_accumulation_steps trong ds_config.json
+TARGET_HOURS = 3.0       # SUA SO NAY theo so gio ban dinh thue GPU - train se tu dung dung gio
 LOG_EVERY = 10
-SAVE_EVERY = 200
+SAVE_EVERY_SEC = 900     # luu checkpoint moi 15 phut, mat dien/dut ket noi khong mat het
 
 def get_batch(split):
     data = np.memmap(os.path.join(DATA_DIR, f"{split}.bin"), dtype=np.uint16, mode="r")
@@ -217,6 +236,12 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy(data[i:i + BLOCK_SIZE].astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy(data[i + 1:i + 1 + BLOCK_SIZE].astype(np.int64)) for i in ix])
     return x, y
+
+train_size = os.path.getsize(os.path.join(DATA_DIR, "train.bin")) // 2  # uint16 = 2 byte/token
+tokens_per_step = MICRO_BATCH * BLOCK_SIZE * GRAD_ACCUM
+print(f"Du lieu train: {train_size:,} token. Moi step xu ly {tokens_per_step:,} token.")
+print(f"De train het 1 luot du lieu can khoang {train_size / tokens_per_step:,.0f} step "
+      f"(chua tinh toc do that cua may - se do o duoi).")
 
 config = GPTConfig(block_size=BLOCK_SIZE, vocab_size=50304, n_layer=32,
                     n_head=20, n_embd=2560, dropout=0.1, bias=False)
@@ -226,29 +251,54 @@ model_engine, optimizer, _, _ = deepspeed.initialize(
     model=model, model_parameters=model.parameters(), config="ds_config.json"
 )
 
-for it in range(MAX_ITERS):
+start = time.time()
+last_save = start
+it = 0
+tokens_seen = 0
+calibrated = False
+
+while True:
+    elapsed_hr = (time.time() - start) / 3600
+    if elapsed_hr >= TARGET_HOURS:
+        print(f"Da du {TARGET_HOURS} gio dat muc tieu, dung lai.")
+        break
+
     x, y = get_batch("train")
     x, y = x.to(model_engine.device), y.to(model_engine.device)
     _, loss = model_engine(x, y)
     model_engine.backward(loss)
     model_engine.step()
+    it += 1
+    tokens_seen += tokens_per_step
+
+    if it == 10 and not calibrated:
+        sec_per_step = (time.time() - start) / 10
+        total_steps_est = int(TARGET_HOURS * 3600 / sec_per_step)
+        coverage = min(100, 100 * (total_steps_est * tokens_per_step) / train_size)
+        print(f"\n[DO TOC DO] ~{sec_per_step:.1f} giay/step -> uoc tinh {total_steps_est:,} step "
+              f"trong {TARGET_HOURS} gio -> se train qua ~{coverage:.1f}% du lieu da chuan bi.\n")
+        calibrated = True
+
     if it % LOG_EVERY == 0:
-        print(f"iter {it}: loss {loss.item():.4f}")
-    if it % SAVE_EVERY == 0 and it > 0:
+        print(f"iter {it} ({elapsed_hr:.2f}h): loss {loss.item():.4f}, {tokens_seen:,} token da qua")
+
+    if time.time() - last_save >= SAVE_EVERY_SEC:
         model_engine.save_checkpoint("out-code-3b")
+        last_save = time.time()
 
 model_engine.save_checkpoint("out-code-3b")
-print("Xong.")
+print(f"Xong. Tong {it:,} step, {tokens_seen:,} token da train qua.")
 EOF
+
 ```
 
 ### BẮT BUỘC chạy thử ngắn trước khi chạy thật
 
-Sửa tạm `MAX_ITERS = 3000` thành `MAX_ITERS = 5` trong `train_deepspeed.py`, chạy:
+Sửa tạm `TARGET_HOURS = 3.0` thành `TARGET_HOURS = 0.03` (~2 phút) trong `train_deepspeed.py`, chạy:
 ```bash
 deepspeed train_deepspeed.py
 ```
-Không lỗi + thấy `loss` in ra → sửa lại `MAX_ITERS = 3000` (hoặc cao hơn nếu ngân sách cho phép) rồi chạy thật. Lỗi ngay ở bước này thì copy nguyên lỗi gửi AI ở đoạn chat mới — đỡ tốn tiền GPU cho 1 lỗi cấu hình.
+Không lỗi + thấy dòng `[DO TOC DO]` và `loss` in ra → sửa lại `TARGET_HOURS` thành số giờ thật bạn định thuê GPU rồi chạy thật (script tự dừng đúng giờ, tự tính đang train qua bao nhiêu % dữ liệu đã chuẩn bị — không cần đoán số iteration). Lỗi ngay ở bước này thì copy nguyên lỗi gửi AI ở đoạn chat mới — đỡ tốn tiền GPU cho 1 lỗi cấu hình.
 
 ## Sau khi train xong
 
