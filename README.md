@@ -64,23 +64,44 @@ cat > data/code_3b/prepare.py << 'EOF'
 import os
 import subprocess
 import shutil
+import time
 import numpy as np
 import tiktoken
 from datasets import load_dataset
 
-TARGET_TOKENS = 500_000_000  # thuc te hon 3 ty (xem README: MAX_ITERS moi tinh theo toc do do thuc, khong con doan mo)
+TARGET_TOKENS = 500_000_000  # da giam tu 3 ty xuong cho thuc te (xem README: train theo TARGET_HOURS, khong con doan MAX_ITERS)
 BYTES_PER_TOKEN_EST = 4.5
-need_gb = (TARGET_TOKENS * BYTES_PER_TOKEN_EST) / 1e9
+data_gb = (TARGET_TOKENS * BYTES_PER_TOKEN_EST) / 1e9
+# Uoc tinh THEM: ~30 repo clone (~5GB) + cache Hugging Face khi tai dataset (~10GB)
+# + sau nay convert checkpoint sang FP32 (~15GB cho model 3B) + du phong NVMe offload (~20GB)
+extra_gb = 5 + 10 + 15 + 20
+need_gb = data_gb + extra_gb
 free_gb = shutil.disk_usage(os.path.dirname(__file__)).free / 1e9
-print(f"Uoc tinh can ~{need_gb:.1f}GB dia trong (con {free_gb:.0f}GB trong).")
+print(f"Uoc tinh can ~{need_gb:.0f}GB dia trong (data ~{data_gb:.0f}GB + repo/cache/checkpoint/offload ~{extra_gb}GB), "
+      f"con {free_gb:.0f}GB trong.")
 if free_gb < need_gb * 1.3:
     raise SystemExit(
-        f"KHONG DU DIA: can khoang {need_gb:.1f}GB (co du phong), chi con {free_gb:.0f}GB. "
+        f"KHONG DU DIA: can khoang {need_gb:.0f}GB (co du phong), chi con {free_gb:.0f}GB. "
         f"Giam TARGET_TOKENS trong file nay xuong roi chay lai, hoac them dia cho VPS."
     )
 
 enc = tiktoken.get_encoding("gpt2")
 assert enc.n_vocab <= 50304, "Tokenizer co vocab lon hon vocab_size cua model (50304) - bao AI biet"
+
+def clone_with_retry(url, dest, depth, tries=3):
+    # GitHub co the tam chan (rate limit) neu clone lien tuc qua nhanh -
+    # thu lai vai lan, cho lau hon moi lan, thay vi bo cuoc ngay.
+    for i in range(tries):
+        try:
+            subprocess.run(["git", "clone", "--depth", str(depth), url, dest], check=True, timeout=600)
+            time.sleep(2)  # nghi 1 chut giua cac lan clone, do bi GitHub gioi han toc do
+            return True
+        except Exception as e:
+            print(f"Loi clone {url} (lan {i+1}/{tries}): {e}")
+            if os.path.exists(dest):
+                subprocess.run(["rm", "-rf", dest])
+            time.sleep(10 * (i + 1))
+    return False
 
 total_tokens = 0
 raw_bin = os.path.join(os.path.dirname(__file__), "all_tokens.bin")
@@ -120,11 +141,8 @@ with open(raw_bin, "wb") as fh:
         name, gh = entry.split(":")
         dest = os.path.join(work_dir, name)
         if not os.path.exists(dest):
-            try:
-                subprocess.run(["git", "clone", "--depth", "1", f"https://github.com/{gh}.git", dest],
-                                check=True, timeout=600)
-            except Exception as e:
-                print(f"Bo qua {gh}: {e}")
+            if not clone_with_retry(f"https://github.com/{gh}.git", dest, depth=1):
+                print(f"Bo qua {gh} sau 3 lan thu")
                 continue
         for root, _, files in os.walk(dest):
             for fn in files:
@@ -189,11 +207,8 @@ with open(raw_bin, "wb") as fh:
         name = gh.split("/")[-1]
         dest = os.path.join(work_dir, f"{name}_hist")
         if not os.path.exists(dest):
-            try:
-                subprocess.run(["git", "clone", "--depth", "300", f"https://github.com/{gh}.git", dest],
-                                check=True, timeout=300)
-            except Exception as e:
-                print(f"Bo qua lich su {gh}: {e}")
+            if not clone_with_retry(f"https://github.com/{gh}.git", dest, depth=300):
+                print(f"Bo qua lich su {gh} sau 3 lan thu")
                 continue
         try:
             log = subprocess.run(
@@ -234,24 +249,31 @@ with open(raw_bin, "wb") as fh:
         "Day trading", "Swing trading", "Arbitrage",
     ]
     for title in TRADING_TOPICS:
-        try:
-            q = urllib.parse.urlencode({
-                "action": "query", "format": "json", "prop": "extracts",
-                "explaintext": "true", "redirects": "1", "titles": title,
-            })
-            req = urllib.request.Request(
-                f"https://en.wikipedia.org/w/api.php?{q}",
-                headers={"User-Agent": "personal-research-project/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = jsonlib.loads(resp.read().decode("utf-8"))
-            for page in data.get("query", {}).get("pages", {}).values():
-                text = page.get("extract", "")
-                if text:
-                    write_chunk(fh, f"# {page.get('title', title)}\n{text}\n")
-        except Exception as e:
-            print(f"Bo qua bai '{title}': {e}")
-            continue
+        success = False
+        for attempt in range(2):  # thu 2 lan, cach nhau lau hon neu lan 1 that bai (429 = qua nhieu request)
+            try:
+                q = urllib.parse.urlencode({
+                    "action": "query", "format": "json", "prop": "extracts",
+                    "explaintext": "true", "redirects": "1", "titles": title,
+                })
+                req = urllib.request.Request(
+                    f"https://en.wikipedia.org/w/api.php?{q}",
+                    headers={"User-Agent": "personal-research-project/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = jsonlib.loads(resp.read().decode("utf-8"))
+                for page in data.get("query", {}).get("pages", {}).values():
+                    text = page.get("extract", "")
+                    if text:
+                        write_chunk(fh, f"# {page.get('title', title)}\n{text}\n")
+                success = True
+                break
+            except Exception as e:
+                print(f"Loi bai '{title}' (lan {attempt+1}/2): {e}")
+                time.sleep(5 * (attempt + 1))
+        time.sleep(0.5)  # nghi giua moi bai, tranh goi API qua nhanh bi chan (HTTP 429)
+        if not success:
+            print(f"Bo qua han bai '{title}'")
 
     # 8) Hoi-dap dau tu/tai chinh tong quat (khai niem, khong phai loi khuyen dau tu that)
     fin_qa = load_dataset("gbharti/finance-alpaca", split="train")
@@ -300,10 +322,12 @@ cd ~/ai-agent/nanoGPT
 
 cat > ds_config.json << 'EOF'
 {
-  "train_micro_batch_size_per_gpu": 1,
+  "train_micro_batch_size_per_gpu": 2,
   "gradient_accumulation_steps": 32,
   "fp16": { "enabled": true },
   "optimizer": { "type": "AdamW", "params": { "lr": 3e-4, "betas": [0.9, 0.95] } },
+  "scheduler": { "type": "WarmupLR", "params": { "warmup_min_lr": 0, "warmup_max_lr": 3e-4, "warmup_num_steps": 500 } },
+  "gradient_clipping": 1.0,
   "zero_optimization": {
     "stage": 3,
     "offload_param": { "device": "nvme", "nvme_path": "/root/ai-agent/nvme_offload", "pin_memory": true },
@@ -328,7 +352,7 @@ from model import GPTConfig, GPT
 
 DATA_DIR = "data/code_3b"
 BLOCK_SIZE = 512
-MICRO_BATCH = 1
+MICRO_BATCH = 2          # phai khop voi train_micro_batch_size_per_gpu trong ds_config.json
 GRAD_ACCUM = 32          # phai khop voi gradient_accumulation_steps trong ds_config.json
 TARGET_HOURS = 3.0       # SUA SO NAY theo so gio ban dinh thue GPU - train se tu dung dung gio
 LOG_EVERY = 10
@@ -380,7 +404,9 @@ while True:
         total_steps_est = int(TARGET_HOURS * 3600 / sec_per_step)
         coverage = min(100, 100 * (total_steps_est * tokens_per_step) / train_size)
         print(f"\n[DO TOC DO] ~{sec_per_step:.1f} giay/step -> uoc tinh {total_steps_est:,} step "
-              f"trong {TARGET_HOURS} gio -> se train qua ~{coverage:.1f}% du lieu da chuan bi.\n")
+              f"trong {TARGET_HOURS} gio -> se XU LY qua luong token tuong duong ~{coverage:.1f}% du lieu.\n"
+              f"(Day la uoc tinh, khong phai % chinh xac: lay mau NGAU NHIEN nen co vung bi lap lai, "
+              f"vung khac chua duoc thay - binh thuong voi cach train nay, khong phai loi.)\n")
         calibrated = True
 
     if it % LOG_EVERY == 0:
@@ -416,16 +442,25 @@ import torch
 import tiktoken
 from model import GPTConfig, GPT
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+if device == "cpu":
+    print("CANH BAO: khong thay GPU - sinh chu tren CPU voi model 3B se RAT cham (hang chuc giay/token). "
+          "Chi nen dung de test nhanh vai token, khong dung de xai that.")
+
 config = GPTConfig(block_size=512, vocab_size=50304, n_layer=32, n_head=20, n_embd=2560, dropout=0.0, bias=False)
 model = GPT(config)
 state_dict = torch.load("model_fp32.pt", map_location="cpu")
 state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
 model.load_state_dict(state_dict, strict=False)
+model = model.to(device)
+if device == "cuda":
+    model = model.half()  # fp16 - nhanh hon nhieu, do chinh xac giam khong dang ke khi chi de sinh chu
 model.eval()
 
 enc = tiktoken.get_encoding("gpt2")
-ids = torch.tensor([enc.encode_ordinary("def ")], dtype=torch.long)
-out = model.generate(ids, max_new_tokens=200, temperature=0.8, top_k=50)
+ids = torch.tensor([enc.encode_ordinary("def ")], dtype=torch.long, device=device)
+with torch.no_grad():
+    out = model.generate(ids, max_new_tokens=200, temperature=0.8, top_k=50)
 print(enc.decode(out[0].tolist()))
 EOF
 python3 sample_3b.py
