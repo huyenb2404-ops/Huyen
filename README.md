@@ -2,6 +2,8 @@
 
 📋 Xem **[TIEP_THEO.md](TIEP_THEO.md)** để biết việc cần làm, ai làm gì, cần công cụ/tài liệu gì.
 
+🚀 Muốn lên **~3B tham số** (dùng ZeRO-Infinity, rủi ro cao hơn, chưa test được bằng thật) → xem **[NANG_CAP_3B.md](NANG_CAP_3B.md)**.
+
 ## Việc cần làm trước khi có thiết bị
 
 **Bạn — chỉ 1 việc**: thuê VPS/máy tính (CPU cũng được để thử trước, có GPU thì train nhanh hơn). Có rồi thì quay lại chat, nhắn Claude 1 câu là đã có thiết bị.
