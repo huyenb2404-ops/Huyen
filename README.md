@@ -454,14 +454,32 @@ state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
 model.load_state_dict(state_dict, strict=False)
 model = model.to(device)
 if device == "cuda":
-    model = model.half()  # fp16 - nhanh hon nhieu, do chinh xac giam khong dang ke khi chi de sinh chu
+    model = model.half()
 model.eval()
 
 enc = tiktoken.get_encoding("gpt2")
-ids = torch.tensor([enc.encode_ordinary("def ")], dtype=torch.long, device=device)
-with torch.no_grad():
-    out = model.generate(ids, max_new_tokens=200, temperature=0.8, top_k=50)
-print(enc.decode(out[0].tolist()))
+
+# Test qua du cac mang da train - khong chi code, de biet du lieu them vao co
+# thuc su "vao" duoc khong (test 1 cau "def " thoi khong noi len duoc gi ve
+# toan/trading/tieng Viet/tu duy sua loi).
+PROMPTS = {
+    "Code (Python)": "def fibonacci(n):",
+    "Toan (GSM8K-style)": "Question: A store has 15 apples. It sells 6 and gets 20 more. How many apples now?\nAnswer:",
+    "Tieng Viet": "Thanh pho Ha Noi la",
+    "Trading/thi truong": "A limit order is",
+    "Bat loi code": "# Bug: this function crashes on empty list\ndef get_first(items):\n    return items[0]\n\n# Fixed version:\ndef get_first(items):",
+}
+
+for label, prompt in PROMPTS.items():
+    ids = torch.tensor([enc.encode_ordinary(prompt)], dtype=torch.long, device=device)
+    with torch.no_grad():
+        out = model.generate(ids, max_new_tokens=80, temperature=0.8, top_k=50)
+    print(f"\n=== {label} ===")
+    print(enc.decode(out[0].tolist()))
+
+print("\nLuu y: day chi la xem model sinh chu co hop ly khong bang mat, chua phai benchmark "
+      "chinh xac (nhu HumanEval cho code hay dap so dung/sai cho toan) - lam benchmark that "
+      "la buoc rieng, phuc tap hon, co the lam sau khi model on dinh hon.")
 EOF
 python3 sample_3b.py
 ```
