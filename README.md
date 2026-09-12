@@ -492,3 +492,8 @@ python3 sample_3b.py
 1. Model đầu tiên vẫn sẽ thiếu data so với mức lý tưởng (~60 tỷ token) — muốn tốt hơn thì tăng `TARGET_TOKENS` trong `prepare.py` và chạy lại (cần thêm đĩa + thời gian tải tương ứng).
 2. Khi model đủ tốt để sinh code hợp lệ, mới nên nối nó với 1 vòng lặp tự động (giao việc → sinh code → test → sửa).
 3. Train từ đầu là quá trình lặp đi lặp lại (thử → xem kết quả → chỉnh → thử lại), không phải 1 lần chạy là xong.
+4. **Ý cho sau này — tách model trading riêng**: đã cân nhắc và tạm KHÔNG làm ngay (xem lý do bên dưới). Chỉ nên làm khi đủ 2 điều kiện:
+   - Đã gom được nhiều dữ liệu trading hơn hẳn hiện tại (hiện chỉ ~40 bài Wikipedia + finance-alpaca, ~15-20 triệu token) — bao gồm cả dữ liệu nến/giá lịch sử (cố tình để sau, xem phần "Thực tế cần biết").
+   - Model code chính (~2,7B) đã chạy thử thành công, có kết quả thật để đối chiếu.
+
+   Lý do không tách ngay: chia 1 model 30B thành "15B code + 15B trading" KHÔNG giảm được vấn đề bộ nhớ (mỗi model 15B vẫn cần bộ nhớ train riêng của nó, không phải 1 nửa của 30B) và làm vấn đề dữ liệu tệ hơn (cần dữ liệu đủ cho CẢ HAI model riêng biệt, ~300 tỷ token/model, thay vì chia sẻ 1 bộ). Khi đủ dữ liệu trading thật để tách, quy mô model trading nên tính theo đúng lượng dữ liệu lúc đó có, không chọn số tham số trước rồi tìm dữ liệu sau.
