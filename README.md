@@ -351,7 +351,8 @@ import deepspeed
 from model import GPTConfig, GPT
 
 DATA_DIR = "data/code_3b"
-BLOCK_SIZE = 512
+BLOCK_SIZE = 1024        # tang tu 512 - xu ly duoc file code dai hon. Smoke test se cho biet
+                         # co vua bo nho khong; neu OOM, giam MICRO_BATCH xuong 1 truoc (xem duoi)
 MICRO_BATCH = 2          # phai khop voi train_micro_batch_size_per_gpu trong ds_config.json
 GRAD_ACCUM = 32          # phai khop voi gradient_accumulation_steps trong ds_config.json
 TARGET_HOURS = 3.0       # SUA SO NAY theo so gio ban dinh thue GPU - train se tu dung dung gio
@@ -430,6 +431,8 @@ deepspeed train_deepspeed.py
 ```
 Không lỗi + thấy dòng `[DO TOC DO]` và `loss` in ra → sửa lại `TARGET_HOURS` thành số giờ thật bạn định thuê GPU rồi chạy thật (script tự dừng đúng giờ, tự tính đang train qua bao nhiêu % dữ liệu đã chuẩn bị — không cần đoán số iteration). Lỗi ngay ở bước này thì copy nguyên lỗi gửi AI ở đoạn chat mới — đỡ tốn tiền GPU cho 1 lỗi cấu hình.
 
+Bước này cũng chính là chỗ kiểm tra `BLOCK_SIZE=1024` có vừa bộ nhớ máy bạn không (mới tăng từ 512). Nếu lỗi "out of memory" ở đây, sửa `MICRO_BATCH` từ 2 xuống 1 trong `train_deepspeed.py` rồi thử lại — vẫn chưa được thì hạ tiếp `BLOCK_SIZE` xuống 768.
+
 ## Sau khi train xong
 
 DeepSpeed lưu checkpoint dạng riêng, cần đổi về dạng thường trước khi thử model:
@@ -447,7 +450,7 @@ if device == "cpu":
     print("CANH BAO: khong thay GPU - sinh chu tren CPU voi model 3B se RAT cham (hang chuc giay/token). "
           "Chi nen dung de test nhanh vai token, khong dung de xai that.")
 
-config = GPTConfig(block_size=512, vocab_size=50304, n_layer=32, n_head=20, n_embd=2560, dropout=0.0, bias=False)
+config = GPTConfig(block_size=1024, vocab_size=50304, n_layer=32, n_head=20, n_embd=2560, dropout=0.0, bias=False)
 model = GPT(config)
 state_dict = torch.load("model_fp32.pt", map_location="cpu")
 state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
