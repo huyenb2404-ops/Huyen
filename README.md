@@ -72,13 +72,16 @@ from datasets import load_dataset
 TARGET_TOKENS = 500_000_000  # da giam tu 3 ty xuong cho thuc te (xem README: train theo TARGET_HOURS, khong con doan MAX_ITERS)
 BYTES_PER_TOKEN_EST = 4.5
 data_gb = (TARGET_TOKENS * BYTES_PER_TOKEN_EST) / 1e9
-# Uoc tinh THEM: ~30 repo clone (~5GB) + cache Hugging Face khi tai dataset (~10GB)
-# + sau nay convert checkpoint sang FP32 (~15GB cho model 3B) + du phong NVMe offload (~20GB)
-extra_gb = 5 + 10 + 15 + 20
+# Chi tinh nhung gi BUOC NAY (chuan bi data) can that: repo clone (~5GB) + cache Hugging Face (~10GB).
+# Phan checkpoint FP32 (~15GB) + du phong NVMe offload (~20GB) chi can LUC TRAIN, o may co GPU -
+# neu may do khac may nay thi khong tinh vao day, tranh bao dong gia tren may chi lam data.
+extra_gb = 5 + 10
 need_gb = data_gb + extra_gb
 free_gb = shutil.disk_usage(os.path.dirname(__file__)).free / 1e9
-print(f"Uoc tinh can ~{need_gb:.0f}GB dia trong (data ~{data_gb:.0f}GB + repo/cache/checkpoint/offload ~{extra_gb}GB), "
+print(f"Uoc tinh Buoc 1 can ~{need_gb:.0f}GB dia trong (data ~{data_gb:.0f}GB + repo/cache ~{extra_gb}GB), "
       f"con {free_gb:.0f}GB trong.")
+print("Luu y: neu may TRAIN (co GPU) la may khac may nay, may do can rieng ~35GB nua "
+      "(checkpoint FP32 + du phong NVMe offload) - kiem tra o may do lúc chuan bi train.")
 if free_gb < need_gb * 1.3:
     raise SystemExit(
         f"KHONG DU DIA: can khoang {need_gb:.0f}GB (co du phong), chi con {free_gb:.0f}GB. "
