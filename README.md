@@ -307,6 +307,17 @@ print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 # Don dep repo da clone - khong can nua sau khi da tokenize xong, giai phong ~15-20GB dia
 shutil.rmtree(work_dir, ignore_errors=True)
 print("Da xoa thu muc repo tam (_src/) de giai phong dia - du lieu that nam trong train.bin/val.bin.")
+
+# Bao dien thoai biet da xong - dung ntfy.sh (mien phi, khong can tai khoan)
+try:
+    import urllib.request as _ur
+    _ur.urlopen(_ur.Request(
+        "https://ntfy.sh/huyenb2404-vps-databuild-x7q2",
+        data=f"XONG Buoc 1: {total_tokens:,} token da san sang trong train.bin/val.bin".encode(),
+        method="POST",
+    ), timeout=10)
+except Exception as e:
+    print(f"Khong gui duoc thong bao (khong sao, du lieu van xong binh thuong): {e}")
 EOF
 python3 data/code_3b/prepare.py
 ```
