@@ -326,6 +326,10 @@ python3 data/code_3b/prepare.py
 
 ## Bước 2 — Cài DeepSpeed + train model ~3B
 
+**Chia nhiều lần thuê GPU — làm được, và nên làm vậy**: thuê GPU vài giờ, train, tắt máy, vài ngày sau thuê lại, script **tự tiếp tục từ checkpoint cũ**, không train lại từ đầu. Dữ liệu (`train.bin`/`val.bin` đã chuẩn bị ở Bước 1) dùng lại y nguyên mỗi lần — **không cần xoá đi tải lại**, vì mục tiêu là train nhiều lượt qua CÙNG 1 bộ dữ liệu đó (15 tỷ token) để model học sâu hơn dần, không phải mỗi lần đổi sang dữ liệu mới.
+
+⚠️ **Kiểm tra 1 điều trước khi tắt máy GPU**: nếu nơi thuê GPU là máy **tạm thời, xoá hẳn sau khi trả** (không phải chỉ tắt/pause), checkpoint (`out-code-3b/`) sẽ mất theo — cần copy nó về VPS không GPU (dùng `scp -r out-code-3b/ user@vps-cu:~/ai-agent/nanoGPT/`) TRƯỚC khi trả máy GPU, rồi copy ngược lại khi thuê GPU lần sau. Nếu nơi thuê cho phép tạm dừng (giữ nguyên ổ đĩa, chỉ ngừng tính tiền GPU) thì không cần bước này. Không chắc loại nào thì cứ copy về cho chắc, chỉ mất thêm vài phút.
+
 ```bash
 cd ~/ai-agent/nanoGPT
 
@@ -389,10 +393,20 @@ model_engine, optimizer, _, _ = deepspeed.initialize(
     model=model, model_parameters=model.parameters(), config="ds_config.json"
 )
 
-start = time.time()
-last_save = start
+# QUAN TRONG: neu da tung train truoc do (co checkpoint trong out-code-3b), tiep tuc tu do -
+# khong thi moi lan thue GPU lai la train lai tu dau, mat het cong suc lan truoc.
 it = 0
 tokens_seen = 0
+load_path, client_state = model_engine.load_checkpoint("out-code-3b")
+if load_path is not None:
+    it = client_state.get("it", 0)
+    tokens_seen = client_state.get("tokens_seen", 0)
+    print(f"Da tim thay checkpoint cu - TIEP TUC tu iter {it:,} ({tokens_seen:,} token da train truoc do).")
+else:
+    print("Khong co checkpoint cu - bat dau train tu dau (lan dau tien).")
+
+start = time.time()
+last_save = start
 calibrated = False
 
 while True:
@@ -423,11 +437,21 @@ while True:
         print(f"iter {it} ({elapsed_hr:.2f}h): loss {loss.item():.4f}, {tokens_seen:,} token da qua")
 
     if time.time() - last_save >= SAVE_EVERY_SEC:
-        model_engine.save_checkpoint("out-code-3b")
+        model_engine.save_checkpoint("out-code-3b", client_state={"it": it, "tokens_seen": tokens_seen})
         last_save = time.time()
 
-model_engine.save_checkpoint("out-code-3b")
-print(f"Xong. Tong {it:,} step, {tokens_seen:,} token da train qua.")
+model_engine.save_checkpoint("out-code-3b", client_state={"it": it, "tokens_seen": tokens_seen})
+print(f"Xong. Tong {it:,} step, {tokens_seen:,} token da train qua (cong don tu truoc den gio).")
+
+try:
+    import urllib.request as _ur
+    _ur.urlopen(_ur.Request(
+        "https://ntfy.sh/huyenb2404-vps-databuild-x7q2",
+        data=f"XONG 1 phien train: {it:,} step, {tokens_seen:,} token cong don. Co the tat GPU.".encode(),
+        method="POST",
+    ), timeout=10)
+except Exception as e:
+    print(f"Khong gui duoc thong bao (khong sao): {e}")
 EOF
 
 ```
