@@ -69,20 +69,20 @@ import numpy as np
 import tiktoken
 from datasets import load_dataset
 
-TARGET_TOKENS = 500_000_000  # da giam tu 3 ty xuong cho thuc te (xem README: train theo TARGET_HOURS, khong con doan MAX_ITERS)
-BYTES_PER_TOKEN_EST = 4.5
-data_gb = (TARGET_TOKENS * BYTES_PER_TOKEN_EST) / 1e9
-# Chi tinh nhung gi BUOC NAY (chuan bi data) can that: repo clone (~5GB) + cache Hugging Face (~10GB).
-# Phan checkpoint FP32 (~15GB) + du phong NVMe offload (~20GB) chi can LUC TRAIN, o may co GPU -
-# neu may do khac may nay thi khong tinh vao day, tranh bao dong gia tren may chi lam data.
-extra_gb = 5 + 10
-need_gb = data_gb + extra_gb
+TARGET_TOKENS = 15_000_000_000  # dung het 75GB dia theo yeu cau - xem tinh toan trong README
+# Chi phi CO DINH tren dia, khong doi theo TARGET_TOKENS:
+# ~30 repo code (depth 1, ~5GB) + 12 repo lay lich su (depth 300, nang hon, ~12GB) + cache Hugging Face (~10GB)
+FIXED_OVERHEAD_GB = 5 + 12 + 10
+# Thiet ke ghi thang vao train.bin/val.bin (khong qua file gop trung gian nua) ->
+# dung luong token cuoi cung = TARGET_TOKENS * 2 byte (uint16), khong con canh "dinh gap doi" luc chia truoc day.
+token_data_gb = (TARGET_TOKENS * 2) / 1e9
+need_gb = token_data_gb + FIXED_OVERHEAD_GB
 free_gb = shutil.disk_usage(os.path.dirname(__file__)).free / 1e9
-print(f"Uoc tinh Buoc 1 can ~{need_gb:.0f}GB dia trong (data ~{data_gb:.0f}GB + repo/cache ~{extra_gb}GB), "
+print(f"Uoc tinh Buoc 1 can ~{need_gb:.0f}GB (token data ~{token_data_gb:.0f}GB + repo/cache co dinh ~{FIXED_OVERHEAD_GB}GB), "
       f"con {free_gb:.0f}GB trong.")
 print("Luu y: neu may TRAIN (co GPU) la may khac may nay, may do can rieng ~35GB nua "
       "(checkpoint FP32 + du phong NVMe offload) - kiem tra o may do lúc chuan bi train.")
-if free_gb < need_gb * 1.3:
+if free_gb < need_gb * 1.15:
     raise SystemExit(
         f"KHONG DU DIA: can khoang {need_gb:.0f}GB (co du phong), chi con {free_gb:.0f}GB. "
         f"Giam TARGET_TOKENS trong file nay xuong roi chay lai, hoac them dia cho VPS."
@@ -92,12 +92,10 @@ enc = tiktoken.get_encoding("gpt2")
 assert enc.n_vocab <= 50304, "Tokenizer co vocab lon hon vocab_size cua model (50304) - bao AI biet"
 
 def clone_with_retry(url, dest, depth, tries=3):
-    # GitHub co the tam chan (rate limit) neu clone lien tuc qua nhanh -
-    # thu lai vai lan, cho lau hon moi lan, thay vi bo cuoc ngay.
     for i in range(tries):
         try:
             subprocess.run(["git", "clone", "--depth", str(depth), url, dest], check=True, timeout=600)
-            time.sleep(2)  # nghi 1 chut giua cac lan clone, do bi GitHub gioi han toc do
+            time.sleep(2)
             return True
         except Exception as e:
             print(f"Loi clone {url} (lan {i+1}/{tries}): {e}")
@@ -107,16 +105,23 @@ def clone_with_retry(url, dest, depth, tries=3):
     return False
 
 total_tokens = 0
-raw_bin = os.path.join(os.path.dirname(__file__), "all_tokens.bin")
+train_path = os.path.join(os.path.dirname(__file__), "train.bin")
+val_path = os.path.join(os.path.dirname(__file__), "val.bin")
 
-def write_chunk(fh, text):
-    # Tokenize tung doan nho va ghi thang ra dia - khong gom het van ban
-    # vao 1 chuoi khong lo roi tokenize 1 lan (de no RAM voi hang ty token).
+def write_chunk(train_fh, val_fh, text):
+    # Chia train/val ngay luc ghi (~98/2), khong qua file gop trung gian ->
+    # tranh can gap doi dung luong dia cung luc, quan trong khi dung gan het 75GB.
     global total_tokens
     if not text:
         return
     ids = enc.encode_ordinary(text)
-    np.array(ids, dtype=np.uint16).tofile(fh)
+    if not ids:
+        return
+    arr = np.array(ids, dtype=np.uint16)
+    if np.random.random() < 0.98:
+        arr.tofile(train_fh)
+    else:
+        arr.tofile(val_fh)
     total_tokens += len(ids)
 
 REPOS = [
@@ -136,7 +141,7 @@ REPOS = [
 work_dir = os.path.join(os.path.dirname(__file__), "_src")
 os.makedirs(work_dir, exist_ok=True)
 
-with open(raw_bin, "wb") as fh:
+with open(train_path, "wb") as train_fh, open(val_path, "wb") as val_fh:
     # 1) Code that - clone ~30 repo GitHub mo
     for entry in REPOS:
         if total_tokens >= TARGET_TOKENS:
@@ -152,55 +157,56 @@ with open(raw_bin, "wb") as fh:
                 if fn.endswith(".py"):
                     try:
                         with open(os.path.join(root, fn), "r", encoding="utf-8", errors="ignore") as f:
-                            write_chunk(fh, f.read())
+                            write_chunk(train_fh, val_fh, f.read())
                     except Exception:
                         pass
         print(f"Sau {name}: ~{total_tokens:,} token")
 
-    # 2) Van ban chat luong cao quy mo lon (mau co san 10 ty token, lay 1 phan)
+    # 2) Van ban chat luong cao quy mo lon (mau co san 10 ty token, lay den khi het mau hoac du ty le)
     if total_tokens < TARGET_TOKENS * 0.55:
         fw = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
         for x in fw:
             if total_tokens >= TARGET_TOKENS * 0.55:
                 break
-            write_chunk(fh, x.get("text", ""))
+            write_chunk(train_fh, val_fh, x.get("text", ""))
+        print(f"Sau FineWeb-Edu: ~{total_tokens:,} token")
 
-    # 3) Wikipedia Anh + Viet, TinyStories
+    # 3) Wikipedia Anh + Viet, TinyStories - KHONG gioi han so bai nho nhu truoc (muc tieu lon hon
+    # nhieu lan roi), de moi nguon tu chay den khi het du lieu that hoac du ty le muc tieu
     extra_sources = [
-        ("wikimedia/wikipedia", "20231101.en", 200_000),
-        ("wikimedia/wikipedia", "20231101.vi", 200_000),
-        ("roneneldan/TinyStories", None, 100_000),
+        ("wikimedia/wikipedia", "20231101.en", 0.85),
+        ("wikimedia/wikipedia", "20231101.vi", 0.90),
+        ("roneneldan/TinyStories", None, 1.0),
     ]
-    for ds_name, cfg, take_n in extra_sources:
+    for ds_name, cfg, stop_ratio in extra_sources:
         if total_tokens >= TARGET_TOKENS:
             break
         stream = load_dataset(ds_name, cfg, split="train", streaming=True) if cfg else \
                  load_dataset(ds_name, split="train", streaming=True)
-        for x in stream.take(take_n):
-            if total_tokens >= TARGET_TOKENS:
+        for x in stream:
+            if total_tokens >= TARGET_TOKENS * stop_ratio:
                 break
-            write_chunk(fh, x.get("text", ""))
+            write_chunk(train_fh, val_fh, x.get("text", ""))
+        print(f"Sau {ds_name} {cfg or ''}: ~{total_tokens:,} token")
 
     # 4) Tu duy tinh toan + suy luan khoa hoc
     math_ds = load_dataset("openai/gsm8k", "main", split="train")
     for x in math_ds:
-        write_chunk(fh, f"Question: {x['question']}\nAnswer: {x['answer']}\n")
+        write_chunk(train_fh, val_fh, f"Question: {x['question']}\nAnswer: {x['answer']}\n")
 
     arc_ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="train")
     for x in arc_ds:
         pairs = list(zip(x["choices"]["label"], x["choices"]["text"]))
         choices_str = "\n".join(f"{lbl}) {txt}" for lbl, txt in pairs)
         correct = dict(pairs).get(x["answerKey"], "")
-        write_chunk(fh, f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}\n")
+        write_chunk(train_fh, val_fh, f"Question: {x['question']}\nChoices:\n{choices_str}\nAnswer: {x['answerKey']}) {correct}\n")
 
     # 5) Toan kho hon, giai chi tiet tung buoc (bo sung GSM8K de tu duy sau hon)
     math_hard = load_dataset("hendrycks/competition_math", split="train")
     for x in math_hard:
-        write_chunk(fh, f"Problem: {x['problem']}\nSolution: {x['solution']}\n")
+        write_chunk(train_fh, val_fh, f"Problem: {x['problem']}\nSolution: {x['solution']}\n")
 
     # 6) Tu duy "bat loi + sua loi" that - lay tu chinh cac commit sua bug trong code that
-    # (khong dung nguon moi, dung lai git history cua repo da clone; can clone sau hon
-    # vi buoc 1 dung --depth 1 nen khong co lich su de doc)
     HISTORY_REPOS = [
         "pallets/click", "psf/requests", "pallets/flask", "tqdm/tqdm", "encode/httpx",
         "pytest-dev/pytest", "pandas-dev/pandas", "django/django", "numpy/numpy",
@@ -227,13 +233,12 @@ with open(raw_bin, "wb") as fh:
                     ["git", "-C", dest, "show", h, "-p"],
                     capture_output=True, text=True, timeout=30
                 ).stdout
-                if 200 < len(diff) < 8000:  # bo qua commit qua nho (khong co gi de hoc) hoac qua to (kho hoc)
-                    write_chunk(fh, f"# Vi du sua loi that trong code (commit that tu {gh}):\n{diff}\n")
+                if 200 < len(diff) < 8000:
+                    write_chunk(train_fh, val_fh, f"# Vi du sua loi that trong code (commit that tu {gh}):\n{diff}\n")
             except Exception:
                 continue
 
     # 7) Kien thuc trading/thi truong - KHAI NIEM thoi, CHUA phai du lieu nen/gia
-    # (dung dung API cua Wikipedia de lay dung bai lien quan, khong random nhu wiki o tren)
     import urllib.request
     import urllib.parse
     import json as jsonlib
@@ -253,7 +258,7 @@ with open(raw_bin, "wb") as fh:
     ]
     for title in TRADING_TOPICS:
         success = False
-        for attempt in range(2):  # thu 2 lan, cach nhau lau hon neu lan 1 that bai (429 = qua nhieu request)
+        for attempt in range(2):
             try:
                 q = urllib.parse.urlencode({
                     "action": "query", "format": "json", "prop": "extracts",
@@ -268,13 +273,13 @@ with open(raw_bin, "wb") as fh:
                 for page in data.get("query", {}).get("pages", {}).values():
                     text = page.get("extract", "")
                     if text:
-                        write_chunk(fh, f"# {page.get('title', title)}\n{text}\n")
+                        write_chunk(train_fh, val_fh, f"# {page.get('title', title)}\n{text}\n")
                 success = True
                 break
             except Exception as e:
                 print(f"Loi bai '{title}' (lan {attempt+1}/2): {e}")
                 time.sleep(5 * (attempt + 1))
-        time.sleep(0.5)  # nghi giua moi bai, tranh goi API qua nhanh bi chan (HTTP 429)
+        time.sleep(0.5)
         if not success:
             print(f"Bo qua han bai '{title}'")
 
@@ -284,7 +289,7 @@ with open(raw_bin, "wb") as fh:
         instr = x.get("instruction", "") or ""
         inp = x.get("input", "") or ""
         out = x.get("output", "") or ""
-        write_chunk(fh, f"Question: {instr}" + (f"\n{inp}" if inp else "") + f"\nAnswer: {out}\n")
+        write_chunk(train_fh, val_fh, f"Question: {instr}" + (f"\n{inp}" if inp else "") + f"\nAnswer: {out}\n")
 
     # 9) Giai bai toan lap trinh that (co do kho), de hoc tu duy giai quyet van de bang code
     apps_ds = load_dataset("codeparrot/apps", split="train")
@@ -295,23 +300,13 @@ with open(raw_bin, "wb") as fh:
             sols = []
         if not sols:
             continue
-        write_chunk(fh, f"Problem ({x['difficulty']}): {x['question']}\nSolution:\n{sols[0]}\n")
+        write_chunk(train_fh, val_fh, f"Problem ({x['difficulty']}): {x['question']}\nSolution:\n{sols[0]}\n")
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
 
-# Chia train/val bang memmap - doc/ghi truc tiep tren dia, khong load het vao RAM
-all_ids = np.memmap(raw_bin, dtype=np.uint16, mode="r")
-n = len(all_ids)
-split = int(n * 0.98)
-train_arr = np.memmap(os.path.join(os.path.dirname(__file__), "train.bin"), dtype=np.uint16, mode="w+", shape=(split,))
-train_arr[:] = all_ids[:split]
-train_arr.flush()
-val_arr = np.memmap(os.path.join(os.path.dirname(__file__), "val.bin"), dtype=np.uint16, mode="w+", shape=(n - split,))
-val_arr[:] = all_ids[split:]
-val_arr.flush()
-del all_ids, train_arr, val_arr
-os.remove(raw_bin)
-print(f"Da ghi train.bin ({split:,} token) + val.bin ({n - split:,} token).")
+# Don dep repo da clone - khong can nua sau khi da tokenize xong, giai phong ~15-20GB dia
+shutil.rmtree(work_dir, ignore_errors=True)
+print("Da xoa thu muc repo tam (_src/) de giai phong dia - du lieu that nam trong train.bin/val.bin.")
 EOF
 python3 data/code_3b/prepare.py
 ```
