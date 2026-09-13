@@ -397,7 +397,10 @@ model_engine, optimizer, _, _ = deepspeed.initialize(
 # khong thi moi lan thue GPU lai la train lai tu dau, mat het cong suc lan truoc.
 it = 0
 tokens_seen = 0
-load_path, client_state = model_engine.load_checkpoint("out-code-3b")
+try:
+    load_path, client_state = model_engine.load_checkpoint("out-code-3b", tag="latest")
+except Exception:
+    load_path = None
 if load_path is not None:
     it = client_state.get("it", 0)
     tokens_seen = client_state.get("tokens_seen", 0)
@@ -437,10 +440,10 @@ while True:
         print(f"iter {it} ({elapsed_hr:.2f}h): loss {loss.item():.4f}, {tokens_seen:,} token da qua")
 
     if time.time() - last_save >= SAVE_EVERY_SEC:
-        model_engine.save_checkpoint("out-code-3b", client_state={"it": it, "tokens_seen": tokens_seen})
+        model_engine.save_checkpoint("out-code-3b", tag="latest", client_state={"it": it, "tokens_seen": tokens_seen})
         last_save = time.time()
 
-model_engine.save_checkpoint("out-code-3b", client_state={"it": it, "tokens_seen": tokens_seen})
+model_engine.save_checkpoint("out-code-3b", tag="latest", client_state={"it": it, "tokens_seen": tokens_seen})
 print(f"Xong. Tong {it:,} step, {tokens_seen:,} token da train qua (cong don tu truoc den gio).")
 
 try:
