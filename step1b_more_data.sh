@@ -52,6 +52,12 @@ with open(os.path.join(DATA_DIR, "train.bin"), "ab") as train_fh, \
 
 print(f"XONG BUOC 1b: them ~{new_tokens:,} token moi vao train.bin/val.bin (cong don voi du lieu Buoc 1 cu).")
 
+import datetime
+with open(os.path.join(DATA_DIR, "DATA_MANIFEST.txt"), "a") as mf:
+    mf.write(f"[Buoc 1b - {datetime.datetime.now().isoformat()}]\n")
+    mf.write(f"Them: {new_tokens:,} token tu HuggingFaceFW/fineweb-edu (sample-100BT)\n\n")
+print("Da cap nhat DATA_MANIFEST.txt.")
+
 try:
     import urllib.request as _ur
     _ur.urlopen(_ur.Request(

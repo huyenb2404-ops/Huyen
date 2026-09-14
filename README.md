@@ -2,6 +2,10 @@
 
 📋 Xem **[TIEP_THEO.md](TIEP_THEO.md)** để biết việc cần làm, ai làm gì, cần công cụ/tài liệu gì.
 
+📦 Sau khi Bước 1 xong mà còn dư đĩa/thời gian rảnh → chạy thêm **[step1b_more_data.sh](step1b_more_data.sh)** (lấp đầy đĩa còn trống bằng thêm dữ liệu, không xoá gì cũ).
+
+**Nếu thiếu chỗ giữa checkpoint và dữ liệu, ưu tiên giữ CHECKPOINT** — dữ liệu tải lại free được (đúng script này), checkpoint (công GPU thật) thì không. Mỗi lần chạy Bước 1/1b, script tự ghi lại đã dùng nguồn nào vào file `data/code_3b/DATA_MANIFEST.txt` — xem file đó để biết chính xác cần tải lại gì nếu sau này xoá đi.
+
 ## Việc cần làm trước khi có thiết bị
 
 **Bạn — chỉ 1 việc**: thuê VPS/máy tính (CPU cũng được để thử trước, có GPU thì train nhanh hơn). Có rồi thì quay lại chat, nhắn Claude 1 câu là đã có thiết bị.
@@ -303,6 +307,23 @@ with open(train_path, "wb") as train_fh, open(val_path, "wb") as val_fh:
         write_chunk(train_fh, val_fh, f"Problem ({x['difficulty']}): {x['question']}\nSolution:\n{sols[0]}\n")
 
 print(f"TONG: ~{total_tokens:,} token thu duoc (muc tieu: {TARGET_TOKENS:,}).")
+
+# Ghi lai RO RANG da dung nguon nao, luc nao - de sau nay de kiem tra / tai lai dung y het
+# neu can (vd sau khi xoa data de nhuong cho checkpoint).
+import datetime
+with open(os.path.join(os.path.dirname(__file__), "DATA_MANIFEST.txt"), "a") as mf:
+    mf.write(f"[Buoc 1 - {datetime.datetime.now().isoformat()}]\n")
+    mf.write(f"Tong token: {total_tokens:,}\n")
+    mf.write("Nguon da dung (chi tiet xem prepare.py trong repo):\n")
+    mf.write(f"  - Code: {len(REPOS)} repo GitHub (Flask, Django, NumPy, Pandas, ...)\n")
+    mf.write("  - HuggingFaceFW/fineweb-edu (sample-10BT)\n")
+    mf.write("  - wikimedia/wikipedia (20231101.en + 20231101.vi)\n")
+    mf.write("  - roneneldan/TinyStories\n")
+    mf.write("  - openai/gsm8k (main), hendrycks/competition_math, allenai/ai2_arc (ARC-Easy)\n")
+    mf.write(f"  - Commit sua loi tu {len(HISTORY_REPOS)} repo (git history that)\n")
+    mf.write("  - ~40 bai Wikipedia ve trading/thi truong + gbharti/finance-alpaca\n")
+    mf.write("  - codeparrot/apps\n\n")
+print("Da ghi DATA_MANIFEST.txt - de kiem tra sau nay dung nguon nao da dung.")
 
 # Don dep repo da clone - khong can nua sau khi da tokenize xong, giai phong ~15-20GB dia
 shutil.rmtree(work_dir, ignore_errors=True)
