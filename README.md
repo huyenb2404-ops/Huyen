@@ -2,6 +2,8 @@
 
 📋 Xem **[TIEP_THEO.md](TIEP_THEO.md)** để biết việc cần làm, ai làm gì, cần công cụ/tài liệu gì.
 
+🗺️ Xem **[LO_TRINH.md](LO_TRINH.md)** để biết dự án đang ở giai đoạn nào, % hoàn thành, và thời gian ước tính từng giai đoạn.
+
 📦 Sau khi Bước 1 xong mà còn dư đĩa/thời gian rảnh → chạy thêm **[step1b_more_data.sh](step1b_more_data.sh)** (lấp đầy đĩa còn trống bằng thêm dữ liệu, không xoá gì cũ).
 
 **Nếu thiếu chỗ giữa checkpoint và dữ liệu, ưu tiên giữ CHECKPOINT** — dữ liệu tải lại free được (đúng script này), checkpoint (công GPU thật) thì không. Mỗi lần chạy Bước 1/1b, script tự ghi lại đã dùng nguồn nào vào file `data/code_3b/DATA_MANIFEST.txt` — xem file đó để biết chính xác cần tải lại gì nếu sau này xoá đi.
